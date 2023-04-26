@@ -703,7 +703,6 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
                               --bucket_interval {params.bucket_interval} \
                               --state_history {params.state_history} \
                               --use_gpu \
-                              
                               --save_pred_paths &")
 
 rule step24_build_sql_database:
