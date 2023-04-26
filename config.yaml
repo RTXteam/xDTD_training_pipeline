@@ -1,0 +1,51 @@
+RTXINFO:
+  CONFIG_SERVER: "araxconfig@araxconfig.rtx.ai"
+  GITHUB_LINK: " https://raw.githubusercontent.com/RTXteam/RTX/master"
+  SECRET_CONFIGFILE: "config_secrets.json"
+  DB_CONFIGFILE: "config_dbs.json"
+
+ZENODOINFO:
+  LINK: "https://zenodo.org/record/7582233"
+  TRAINING_DATA: "training_data.tar.gz"
+  DRUGMECHDB_PATH: "indication_paths.yaml"
+
+KG2INFO:
+  BIOLINK_VERSION: "3.0.0"
+  PUBLICATION_CUTOFF: 10
+  NGD_CUTOFF: 0.6
+
+SYSTEMINFO:
+  NUM_CPU: 80
+
+TRAINING_DATA:
+  TP:
+    MYCHEM: training_data/mychem_tp.txt
+    SEMMED: training_data/semmed_tp.txt
+    NDF: training_data/ndf_tp.txt
+    REPODB: training_data/repoDB_tp.txt
+  TN:
+    MYCHEM: training_data/mychem_tn.txt
+    SEMMED: training_data/semmed_tn.txt
+    NDF: training_data/ndf_tn.txt
+    REPODB: training_data/repoDB_tn.txt
+  DRUGBANK_XML: drugbank.xml
+  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.3
+
+MODELINFO:
+  PARAMS:
+    BANKWIDTH: 3000
+    MAX_PATH: 3
+    SEED: 1023
+    GPU: 1
+    STATE_HISTORY: 2
+    LEARNING_RATE: 0.0005
+    
+PARALLEL_PRECOMPUTE:
+  K: 15
+  NUM_GPU: 3
+  N_drugs: 25
+  N_paths: 25
+  batch_size: 200
+
+DATABASE:
+  DATABASE_NAME: 'ExplainableDTD.db'
