@@ -48,7 +48,7 @@ if __name__ == '__main__':
     parser.add_argument("--ngd_threshold", type=float, help="Threshold used to filter NGD score", default=0.6)
     parser.add_argument("--num_core", type=int, help="Number of CPU cores to run", default=64)
     parser.add_argument("--batch_size", type=int, help="Batch Size", default=200000)
-    parser.add_argument("--biolink_version", type=str, help="Biolink version", default="2.1.0")
+    parser.add_argument("--biolink_version", type=str, help="Biolink version", default="3.1.2")
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 

@@ -10,6 +10,7 @@ from tqdm import tqdm, trange
 from knowledge_graph import KnowledgeGraph
 from kg_env import KGEnvironment
 from models import DiscriminatorActorCritic
+from hummingbird.ml import convert
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -25,8 +26,6 @@ class creativeDTD:
         ## set up args
         self.args = args
         self.args.data_dir = data_path
-        if self.args.use_gpu:
-            torch.cuda.set_device(self.args.gpu)
 
         ## check device
         self.args.use_gpu, self.args.device = utils.check_device(logger = self.args.logger, use_gpu = self.args.use_gpu, gpu = self.args.gpu)
@@ -45,9 +44,10 @@ class creativeDTD:
 
         ## load ML model
         self.ML_model = utils.load_ML_model(model_path)
+        pretrain_model = convert(self.ML_model, 'pytorch')
 
         ## load RL model
-        self.kg = KnowledgeGraph(self.args, bandwidth=self.args.bandwidth, emb_dropout_rate=self.args.emb_dropout_rate, bucket_interval=self.args.bucket_interval, load_graph=True)
+        self.kg = KnowledgeGraph(self.args, bandwidth=self.args.bandwidth, entity_dim=args.entity_dim, entity_type_dim=args.entity_type_dim, relation_dim=args.relation_dim, emb_dropout_rate=self.args.emb_dropout_rate, bucket_interval=self.args.bucket_interval, load_graph=True)
         if self.args.use_gpu:
             utils.empty_gpu_cache(self.args)
         # if self.args.use_gpu:
@@ -56,7 +56,7 @@ class creativeDTD:
         # else:
         #     with open(os.path.join(data_path,'kg_cpu.pkl'),'rb') as infile:
         #         self.kg = pickle.load(infile)
-        self.env = KGEnvironment(self.args, self.kg, max_path_len=self.args.max_path, state_pre_history=self.args.state_history)
+        self.env = KGEnvironment(self.args, pretrain_model, self.kg, max_path_len=self.args.max_path, state_pre_history=self.args.state_history)
         self.RL_model = DiscriminatorActorCritic(self.args, self.kg, self.args.state_history, self.args.gamma, self.args.target_update, self.args.ac_hidden, self.args.disc_hidden, self.args.metadisc_hidden)
         self.args.policy_net_file = os.path.join(model_path,'ADAC_model', 'policy_net', 'best_moa_model.pt')
         policy_net = torch.load(self.args.policy_net_file, map_location=self.args.device)
@@ -84,7 +84,7 @@ class creativeDTD:
             self.args.logger.warning(f"Can't find curie {disease_curie}")
             return False
 
-    def predict_top_N_drugs(self, N: int = 50):
+    def predict_top_N_drugs(self, N: int = 50, threshold: float = 0.6):
         self.args.logger.info(f"Predicting top{N} drugs for disease {self.disease_curie}")
         if self.disease_curie:
             X = np.vstack([np.hstack([self.entity_embeddings_dict[drug_curie_id],self.entity_embeddings_dict[self.disease_curie]]) for drug_curie_id in self.drug_curie_ids])
@@ -92,10 +92,16 @@ class creativeDTD:
             res = pd.concat([pd.DataFrame(self.drug_curie_ids),pd.DataFrame([self.disease_curie]*len(self.drug_curie_ids)),pd.DataFrame(res_temp)], axis=1)
             res.columns = ['drug_id','disease_id','tn_score','tp_score','unknown_score']
             res = res.sort_values(by=['tp_score'],ascending=False).reset_index(drop=True)
-            self.top_N_drugs = res.iloc[:N,:]
-            self.top_N_drugs = self.top_N_drugs.apply(lambda row: [row[0],utils.id_to_name(row[0]),row[1],utils.id_to_name(row[1]),row[2],row[3],row[4]], axis=1, result_type='expand')
+            self.top_N_drugs = res.apply(lambda row: [row[0],utils.id_to_name(row[0]),row[1],utils.id_to_name(row[1]),row[2],row[3],row[4]], axis=1, result_type='expand')
             self.top_N_drugs.columns = ['drug_id','drug_name','disease_id','disease_name','tn_score','tp_score','unknown_score']
-            return self.top_N_drugs
+            ## filter results based on threshold
+            self.top_N_drugs = self.top_N_drugs.query(f" tp_score >= {threshold}").reset_index(drop=True)
+            self.top_N_drugs = self.top_N_drugs.iloc[:N,:]
+            if len(self.top_N_drugs) >0:
+                return self.top_N_drugs
+            else:
+                self.args.logger.warning(f'No prediction results found for disease {self.disease_curie} based on threshold {threshold}.' )
+                return None
         else:
             self.args.logger.warning(f"No disease curie provided!! Please run 'set_query_disease' function to set up disease curie")
             return None
@@ -107,6 +113,8 @@ class creativeDTD:
             filter_edges = [self.args.relation2id[edge] for edge in ['biolink:related_to','biolink:coexists_with','biolink:contraindicated_for']]
             for index1 in range(len(self.top_N_drugs)):
                 source, target = self.top_N_drugs.loc[index1,['drug_id','disease_id']]
+                if not (utils.check_curie(source, self.args.entity2id)[1] and utils.check_curie(target, self.args.entity2id)[1]):
+                    continue
                 all_paths = [list(path) for path in gt.all_paths(self.G, utils.check_curie(source, self.args.entity2id)[1], utils.check_curie(target, self.args.entity2id)[1], cutoff=3)]
                 entity_paths = []
                 relation_paths = []
@@ -140,7 +148,7 @@ class creativeDTD:
 
     def _make_path(self, rel_ent_score):
         rel_vec, ent_vec, score = rel_ent_score
-        return ['->'.join([utils.id_to_name(self.args.id2entity[ent_vec[index]])+'->'+self.args.id2relation[rel_vec[index+1]] for index in range(len(ent_vec)-1)] + [utils.id_to_name(self.args.id2entity[ent_vec[len(ent_vec)-1]])]), score]
+        return ['->'.join([self.args.id2entity[ent_vec[index]]+'->'+self.args.id2relation[rel_vec[index+1]] for index in range(len(ent_vec)-1)] + [self.args.id2entity[ent_vec[len(ent_vec)-1]]]), score]
 
     def _batch_get_true(self, args, batch_action_spaces, batch_true_actions):
         ((batch_r_space, batch_e_space), batch_action_mask) = batch_action_spaces
@@ -186,9 +194,9 @@ class creativeDTD:
             act_num = 1
 
             if args.use_gpu:
-                action_log_weighted_prob = utils.zeros_var_cuda(len(batch_path_id), use_gpu=True)
+                action_log_weighted_prob = utils.zeros_var_cuda(len(batch_path_id), args, use_gpu=True)
             else:
-                action_log_weighted_prob = utils.zeros_var_cuda(len(batch_path_id), use_gpu=False)
+                action_log_weighted_prob = utils.zeros_var_cuda(len(batch_path_id), args, use_gpu=False)
 
             while not env._done:
                 batch_true_action = [batch_paths[0][batch_path_id][:,act_num], batch_paths[1][batch_path_id][:,act_num]]

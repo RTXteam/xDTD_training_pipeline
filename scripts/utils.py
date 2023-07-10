@@ -12,6 +12,9 @@ import random
 import math
 import re
 from tqdm import tqdm
+import pickle
+import joblib
+import graph_tool.all as gt
 # from bmt import Toolkit
 from biolink_helper import BiolinkHelper
 from neo4j import GraphDatabase
@@ -19,6 +22,7 @@ from sklearn.metrics import f1_score
 from models import Transition
 plt.switch_backend('agg')
 from node_synonymizer import NodeSynonymizer
+nodesynonymizer = NodeSynonymizer()
 
 SELF_LOOP_RELATION = 'SELF_LOOP_RELATION'
 DUMMY_RELATION = 'DUMMY_RELATION'
@@ -470,7 +474,7 @@ def calculate_rank(data_pos_df, all_drug_ids, all_disease_ids, entity_embeddings
             w_both_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
             ## filter 
             temp_df = temp_df.loc[~temp_df[2].isin(list(all_tp_pairs_dict.keys())),:].reset_index(drop=True)
-             # (1) for drug
+            # (1) for drug
             temp_df_1 = pd.concat([temp_df.loc[temp_df[1] == target,:],this_row]).reset_index(drop=True)
             temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
             drug_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
@@ -487,7 +491,7 @@ def calculate_rank(data_pos_df, all_drug_ids, all_disease_ids, entity_embeddings
         elif mode == 'filter':
             ## filter 
             temp_df = temp_df.loc[~temp_df[2].isin(list(all_tp_pairs_dict.keys())),:].reset_index(drop=True)
-             # (1) for drug
+            # (1) for drug
             temp_df_1 = pd.concat([temp_df.loc[temp_df[1] == target,:],this_row]).reset_index(drop=True)
             temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
             drug_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])

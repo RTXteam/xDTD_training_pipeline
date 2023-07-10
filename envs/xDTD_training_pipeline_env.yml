@@ -19,6 +19,7 @@ dependencies:
   - xmltodict
   - nltk
   - pattern
+  - httpx
   - snakemake
   - pip:
     - beautifulsoup4
@@ -37,3 +38,5 @@ dependencies:
     - treelib==1.6.1
     - tensorboard==2.8.0
     - tqdm
+    - pybind11
+    - graph-walker

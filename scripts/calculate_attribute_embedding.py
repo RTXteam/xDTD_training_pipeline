@@ -62,6 +62,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_gpu", action="store_true", help="Whether use GPU or not", default=False)
     parser.add_argument('--node_info', type=str, help='Path to a file containing node information', default=os.path.join(ROOTPath, "data", "filtered_graph_nodes_info.txt"))
     parser.add_argument('--seed', type=int, help='Random seed (default: 1023)', default=1023)
+    parser.add_argument('--pca_components', type=int, help='Number of components for PCA', default=100)
     parser.add_argument("--batch_size", type=int, help="Batch size of bert embedding calculation", default=10)
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
@@ -128,7 +129,7 @@ if __name__ == "__main__":
             
     print("Fitting new embedding with PCA")
 
-    pca = PCA(n_components=100)
+    pca = PCA(n_components=args.pca_components)
     pca_embedding = pca.fit_transform(ori_embedding)
 
     print("Generating and saving data")

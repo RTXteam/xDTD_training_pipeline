@@ -16,8 +16,8 @@ import logging
 pathlist = os.getcwd().split(os.path.sep)
 ROOTindex = pathlist.index("xDTD_training_pipeline")
 ROOTPath = os.path.sep.join([*pathlist[:(ROOTindex + 1)]])
-data_path = '/'.join(path_list[:(ROOTindex+1)] + ['data'])
-model_path = '/'.join(path_list[:(indeROOTindexx+1)] + ['models'])
+data_path = os.path.join(ROOTPath, 'data')
+model_path = os.path.join(ROOTPath, 'models')
 sys.path.append(os.path.join(ROOTPath, 'scripts'))
 import utils
 
@@ -26,15 +26,16 @@ DEBUG = True
 class BuildExplainableDTD(object):
 
     # Constructor
-    def __init__(self, path_to_score_results, path_to_path_results, database_name=None, outdir=None):
+    def __init__(self, args, path_to_score_results, path_to_path_results, database_name=None, outdir=None):
         """
         Args:
+            args (argparse): arguments from command line
             path_to_score_results (str): path to a folder containing the prediction score results of all diseases
             path_to_path_results (str): path to a folder containing the path results of all diseases
             database_name (str, optional): database name (Defaults: ExplainableDTD.db).
             outdir (str, optional): path to a folder where the database is generated (Defaults: ./).
         """
-        self.logger = get_logger('temp.log')
+        self.logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
 
         if not os.path.exists(path_to_score_results) or not len(os.listdir(path_to_score_results)) > 0:
             self.logger.error(f"The given path '{path_to_score_results}' doesn't exist or is an empty folder")
@@ -241,7 +242,7 @@ class BuildExplainableDTD(object):
 def main():
     parser = argparse.ArgumentParser(description="Tests or builds the ExplainableDTD Database", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="buil_sql_database.log")
+    parser.add_argument("--log_name", type=str, help="log file name", default="build_sql_database.log")
     parser.add_argument('--build', action="store_true", required=False, help="If set, (re)build the index from scratch", default=False)
     parser.add_argument('--test', action="store_true", required=False, help="If set, run a test of database by doing several lookups", default=False)
     parser.add_argument('--path_to_score_results', type=str, required=True, help="Path to a folder containing the prediction score results of all diseases")
@@ -254,7 +255,7 @@ def main():
         parser.print_help()
         sys.exit(2)
 
-    EDTDdb = BuildExplainableDTD(args.path_to_score_results, args.path_to_path_results, database_name=args.database_name, outdir=args.outdir)
+    EDTDdb = BuildExplainableDTD(args, args.path_to_score_results, args.path_to_path_results, database_name=args.database_name, outdir=args.outdir)
 
     # To (re)build
     if args.build:
@@ -267,11 +268,11 @@ def main():
         return
 
     print("==== Testing for search for top drugs by disease id ====", flush=True)
-    print(EDTDdb.get_top_drugs_for_disease('MONDO:0008753'))
+    print(EDTDdb.get_top_drugs_for_disease('MONDO:0005148'))
     # print(EDTDdb.get_top_drugs_for_disease(["MONDO:0008753","MONDO:0005148","MONDO:0005155"]))
 
     print("==== Testing for search for top paths by disease id ====", flush=True)
-    print(EDTDdb.get_top_paths_for_disease('MONDO:0008753'))
+    print(EDTDdb.get_top_paths_for_disease('MONDO:0005148'))
     # print(EDTDdb.get_top_paths_for_disease(["MONDO:0008753","MONDO:0005148","MONDO:0005155"]))
 
 ####################################################################################################

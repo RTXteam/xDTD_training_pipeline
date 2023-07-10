@@ -39,6 +39,7 @@ class KnowledgeGraph(nn.Module):
         self.train_target_vectors = None
         self.val_target_vectors = None
         self.all_target_vectors = None
+        self.graph = dict()
 
         args.logger.info('Create knowledge graph')
         self.load_graph_data()
@@ -164,6 +165,7 @@ class KnowledgeGraph(nn.Module):
         for source in range(self.num_entities):
             # Base graph pruning and adding self-loop edges
             action_space = get_action_space(source)
+            self.graph[source] = action_space
             key = int(len(action_space) / self.bucket_interval) + 1
             self.entity2bucketid[source, 0] = key
             self.entity2bucketid[source, 1] = len(action_space_buckets_discrete[key])

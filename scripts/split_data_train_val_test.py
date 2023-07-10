@@ -86,7 +86,7 @@ def split_df_into_train_val_test(df, train_val_test_size, expert_demonstration_t
 
         ## split tp_pairs_in_expert into train set, val set and test set
         count = tp_pairs_in_expert['source'].value_counts()
-        unique_temp = set(count.reset_index().loc[count.reset_index()['source']==1,'index'])
+        unique_temp = set(count.reset_index().loc[count.reset_index()['count']==1,'source'])
         train_tp_pairs_in_expert_1 = tp_pairs_in_expert.loc[tp_pairs_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
         rest_train_tp_pairs_in_expert = tp_pairs_in_expert.loc[~tp_pairs_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
         pad_tp_size = math.ceil(len(tp_pairs_in_expert) * train_val_test_size[0]) - len(train_tp_pairs_in_expert_1)
@@ -109,7 +109,7 @@ def split_df_into_train_val_test(df, train_val_test_size, expert_demonstration_t
 
         ## split tp_pairs_not_in_expert into train set, val set and test set
         count = tp_pairs_not_in_expert['source'].value_counts()
-        unique_temp = set(count.reset_index().loc[count.reset_index()['source']==1,'index'])
+        unique_temp = set(count.reset_index().loc[count.reset_index()['count']==1,'source'])
         train_tp_pairs_not_in_expert_1 = tp_pairs_not_in_expert.loc[tp_pairs_not_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
         rest_train_tp_pairs_not_in_expert = tp_pairs_not_in_expert.loc[~tp_pairs_not_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
         pad_tp_size = math.ceil(len(tp_pairs_not_in_expert) * train_val_test_size[0]) - len(train_tp_pairs_not_in_expert_1)
@@ -138,7 +138,7 @@ def split_df_into_train_val_test(df, train_val_test_size, expert_demonstration_t
 
         ## split triples based on the ratio of train, valid and test sets
         count = tn_pairs['source'].value_counts()
-        unique_temp = set(count.reset_index().loc[count.reset_index()['source']==1,'index'])
+        unique_temp = set(count.reset_index().loc[count.reset_index()['count']==1,'source'])
         train_tn_pairs_1 = tn_pairs.loc[tn_pairs['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
         rest_train_tn_pairs = tn_pairs.loc[~tn_pairs['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
         pad_tp_size = math.ceil(len(tn_pairs) * train_val_test_size[0]) - len(train_tn_pairs_1)
@@ -174,7 +174,6 @@ if __name__ == '__main__':
     parser.add_argument('--all_known_tps', type=str, help='Path to a file containg all known drug-disease pairs', default=os.path.join(ROOTPath, "data", "all_known_tps.txt"))
     parser.add_argument('--filtered_expert_paths', type=str, help='Path to a file containg filtered expert paths', default=os.path.join(ROOTPath, "data", "expert_path_files", f"expert_demonstration_paths_max3_filtered.pkl"))
     parser.add_argument('--filtered_path_relation_entity', type=str, help='Path to a file containg the relations and entities of filtered expert paths', default=os.path.join(ROOTPath, "data", "expert_path_files", f'expert_demonstration_relation_entity_max3_filtered.pkl'))
-    parser.add_argument("--n_random", type=int, help="Number of random pairs assigned to each TP drug in train set, val set and test set for accuracy and f1score", default=30)
     parser.add_argument("--n_random_test_mrr_hk", type=int, help="Number of random pairs assigned to each TP drug in test set for MRR and H@K", default=500)
     parser.add_argument("--train_val_test_size", type=str, help="Proportion of training data, validation data and test data", default="[0.8, 0.1, 0.1]")
     parser.add_argument('--seed', type=int, help='Random seed (default: 1023)', default=1023)
@@ -262,15 +261,6 @@ if __name__ == '__main__':
     pretrain_data_val_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'val_pairs.txt'), sep='\t', index=None)
     pretrain_data_test_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'test_pairs.txt'), sep='\t', index=None)
     val_test_random_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'random_pairs.txt'), sep='\t', index=None)
-
-    # args.pretrain_outdir_2class = os.path.join(args.output_folder,'pretrain_reward_shaping_model_train_val_test_random_data_2class')
-    # if not os.path.isdir(args.pretrain_outdir_2class):
-    #     os.mkdir(args.pretrain_outdir_2class)
-
-    # pretrain_data_train_pairs.loc[pretrain_data_train_pairs['y']!=2,:].reset_index(drop=True).to_csv(os.path.join(args.pretrain_outdir_2class, 'train_pairs.txt'), sep='\t', index=None)
-    # pretrain_data_val_pairs.loc[pretrain_data_val_pairs['y']!=2,:].reset_index(drop=True).to_csv(os.path.join(args.pretrain_outdir_2class, 'val_pairs.txt'), sep='\t', index=None)
-    # pretrain_data_test_pairs.loc[pretrain_data_test_pairs['y']!=2,:].reset_index(drop=True).to_csv(os.path.join(args.pretrain_outdir_2class, 'test_pairs.txt'), sep='\t', index=None)
-    # val_test_random_pairs.to_csv(os.path.join(args.pretrain_outdir_2class, 'random_pairs.txt'), sep='\t', index=None)
 
     ## generate train set, val set and test set for RL model
     args.rl_outdir = os.path.join(args.output_folder, 'RL_model_train_val_test_data')

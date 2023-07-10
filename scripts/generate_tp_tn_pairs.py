@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import argparse
 import json
+from multiprocessing import Pool
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -11,6 +12,38 @@ ROOTindex = pathlist.index("xDTD_training_pipeline")
 ROOTPath = os.path.sep.join([*pathlist[:(ROOTindex + 1)]])
 sys.path.append(os.path.join(ROOTPath, 'scripts'))
 import utils
+from node_synonymizer import NodeSynonymizer
+synonymizer = NodeSynonymizer()
+
+def map_to_graph(row):
+
+    if len(row) == 2:
+        drug, disease = row
+        try:
+            res = synonymizer.get_canonical_curies(drug)[drug]
+        except:
+            res = None
+        preferred_drug_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Drug' or res['preferred_category']=='biolink:SmallMolecule') else None
+        try:
+            res = synonymizer.get_canonical_curies(disease)[disease]
+        except:
+            res = None
+        preferred_disease_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Disease' or res['preferred_category']=='biolink:PhenotypicFeature' or res['preferred_category']=='biolink:DiseaseOrPhenotypicFeature' or res['preferred_category']=='biolink:ClinicalFinding' or res['preferred_category']=='biolink:BehavioralFeature') else None
+        return [preferred_drug_curie, preferred_disease_curie]
+    elif len(row) == 4:
+        count, drug, disease, ngd = row
+        try:
+            res = synonymizer.get_canonical_curies(drug)[drug]
+        except:
+            res = None
+        preferred_drug_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Drug' or res['preferred_category']=='biolink:SmallMolecule') else None
+        try:
+            res = synonymizer.get_canonical_curies(disease)[disease]
+        except:
+            res = None
+        preferred_disease_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Disease' or res['preferred_category']=='biolink:PhenotypicFeature' or res['preferred_category']=='biolink:DiseaseOrPhenotypicFeature' or res['preferred_category']=='biolink:ClinicalFinding' or res['preferred_category']=='biolink:BehavioralFeature') else None
+        return [count, preferred_drug_curie, preferred_disease_curie, ngd]
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -19,6 +52,7 @@ if __name__ == '__main__':
     parser.add_argument("--db_config_path", type=str, help="path to database config file", default="../config_dbs.json")
     parser.add_argument("--secret_config_path", type=str, help="path to secret config file", default="../config_secrets.json")
     parser.add_argument("--graph", type=str, help="path to graph edge file", default=os.path.join(ROOTPath, "data", "filtered_graph_edges.txt"))
+    parser.add_argument("--thread", type=int, help="Number of processes to use", default=100)
     parser.add_argument("--tp", type=str, nargs='*', help="paths to the true positive txts", default=[os.path.join(ROOTPath, "data", "training_data", x) for x in ['semmed_tp.txt','mychem_tp.txt','mychem_tp_umls.txt','NDF_TP.txt']])
     parser.add_argument("--tn", type=str, nargs='*', help="paths to the true negative txts", default=[os.path.join(ROOTPath, "data", "training_data", x) for x in ['semmed_tn.txt','mychem_tn.txt','mychem_tn_umls.txt','NDF_TN.txt']])
     parser.add_argument("--tncutoff", type=int, help="A positive integer for the true negative cutoff of SemMedDB hot counts to include in analysis", default=10)
@@ -95,7 +129,11 @@ if __name__ == '__main__':
     # generate list of true positive and true negative data frames
     for i in range(len(args.tp)):
         temp = pd.read_csv(args.tp[i], sep="\t", index_col=None)
-        temp = temp.drop_duplicates().reset_index().drop(columns=['index'])
+        df_header = temp.columns
+        with Pool(processes=args.thread) as executor:
+            res = [elem for elem in executor.map(map_to_graph, temp.to_numpy())]
+        temp = pd.DataFrame(res, columns=df_header)
+        temp = temp.dropna().drop_duplicates().reset_index().drop(columns=['index'])
         select_rows = list(all_nodes.intersection(set(temp['source'])))
         temp = temp.set_index('source').loc[select_rows,:].reset_index()
         select_rows = list(all_nodes.intersection(set(temp['target'])))
@@ -104,7 +142,11 @@ if __name__ == '__main__':
             TP_list += [temp]
     for i in range(len(args.tn)):
         temp = pd.read_csv(args.tn[i], sep="\t", index_col=None)
-        temp = temp.drop_duplicates().reset_index().drop(columns=['index'])
+        df_header = temp.columns
+        with Pool(processes=args.thread) as executor:
+            res = [elem for elem in executor.map(map_to_graph, temp.to_numpy())]
+        temp = pd.DataFrame(res, columns=df_header)
+        temp = temp.dropna().drop_duplicates().reset_index().drop(columns=['index'])
         select_rows = list(all_nodes.intersection(set(temp['source'])))
         temp = temp.set_index('source').loc[select_rows,:].reset_index()
         select_rows = list(all_nodes.intersection(set(temp['target'])))

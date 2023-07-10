@@ -3,6 +3,7 @@ import sys, os
 import pandas as pd
 import argparse
 import json
+from tqdm import tqdm
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -62,10 +63,21 @@ if __name__ == '__main__':
     conn = utils.Neo4jConnection(uri=neo4j_bolt, user=neo4j_username, pwd=neo4j_password)
 
     ## Pull a dataframe of all graph edges
-    query = "match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and not (m1.id in drug_ids and m2.id in disease_ids) and not (m1.id in disease_ids and m2.id in drug_ids) with distinct m1 as node1, r as edge, m2 as node2 return node2.id as source, node1.id as target, edge.predicate as predicate, edge.publications as publications, edge.knowledge_source as knowledge_source"
+    query = "match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and not (m1.id in drug_ids and m2.id in disease_ids) and not (m1.id in disease_ids and m2.id in drug_ids) with distinct m1 as node1, r as edge, m2 as node2 return node2.id as source, node1.id as target, edge.predicate as predicate, edge.publications as publications, edge.primary_knowledge_source as primary_knowledge_source"
     KG_alledges = conn.query(query)
     KG_alledges.columns = ['source','target','predicate', 'p_publications', 'p_knowledge_source']
     logger.info(f"Total number of triples in kg after removing all edges between drug entities and disease entities: {len(KG_alledges)}")
+    temp_dict = {} 
+    for row in tqdm(KG_alledges.to_numpy(), desc="Merge edges with same subject/predicate/object"):
+        source, target, predicate, p_publications, p_knowledge_source = row
+        p_publications = p_publications if isinstance(p_publications, list) else []
+        p_knowledge_source = [x.strip() for x in p_knowledge_source.split(';')]
+        if (source, predicate, target) in temp_dict:
+            temp_dict[(source, predicate, target)]["p_publications"] += p_publications
+            temp_dict[(source, predicate, target)]["p_knowledge_source"] += p_knowledge_source
+        else:
+            temp_dict[(source, predicate, target)] = {"p_publications": p_publications, "p_knowledge_source": p_knowledge_source}
+    KG_alledges = pd.DataFrame([(key[0], key[2], key[1], list(set(value['p_publications'])), list(set(value['p_knowledge_source']))) for key, value in tqdm(temp_dict.items(), desc="Convert dictionary to dataframe")], columns=['source','target','predicate', 'p_publications', 'p_knowledge_source'])
     KG_alledges.to_csv(os.path.join(output_path, 'graph_edges.txt'), sep='\t', index=None)
 
     ## Pulls a dataframe of all graph nodes with category label

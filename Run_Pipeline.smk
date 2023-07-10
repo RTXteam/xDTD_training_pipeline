@@ -79,8 +79,6 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "policy_model_epoch51.pt")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
         ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
-        ancient(os.path.join(CURRENT_PATH, "results", "path_results")),
-        ancient(os.path.join(CURRENT_PATH, "results", "prediction_scores")),
         ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
         ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
 
@@ -152,7 +150,7 @@ rule step4_filtered_graph_nodes_and_edges:
                               --biolink_version {params.biolink_version} 
         """
 
-rule step5_generate_tp_and_tn_edges:
+rule step5_generate_tp_and_tn_pairs:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_tp_tn_pairs.py")),
         secret_configfile = ancient(config['RTXINFO']['SECRET_CONFIGFILE']),
@@ -242,13 +240,17 @@ rule step9_check_reachable:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "check_reachable.py")),
         true_pairs = ancient(os.path.join(CURRENT_PATH, "data", 'tp_pairs.txt')),
+        entity2freq = ancient(os.path.join(CURRENT_PATH, "data", 'entity2freq.txt')),
+        relation2freq = ancient(os.path.join(CURRENT_PATH, "data", 'relation2freq.txt')),
+        adj_list = ancient(os.path.join(CURRENT_PATH, "data", 'adj_list.pkl')),
+        kg_pgrk = ancient(os.path.join(CURRENT_PATH, "data", 'kg.pgrk')),
         combined_expert_paths = ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'p_expert_paths_combined.txt'))
     output:
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', f"reachable_expert_paths_max{config['MODELINFO']['PARAMS']['MAX_PATH']}.txt"),
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', f"reachable_tp_pairs_max{config['MODELINFO']['PARAMS']['MAX_PATH']}.txt"),
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', f"unreachable_tp_pairs_max{config['MODELINFO']['PARAMS']['MAX_PATH']}.txt")
     params:
-        bandwidth = config['MODELINFO']['PARAMS']['BANKWIDTH'],
+        bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH']
     shell:
         """
@@ -270,9 +272,9 @@ rule step10_generate_expert_paths:
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', f"expert_demonstration_relation_entity_max{config['MODELINFO']['PARAMS']['MAX_PATH']}_filtered.pkl")
     params:
         ngd_threshold = config['KG2INFO']['NGD_CUTOFF'],
-        bandwidth = config['MODELINFO']['PARAMS']['BANKWIDTH'],
+        bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
-        process = 100,
+        process = 180,
         batch_size = 500,
         biolink_version = config['KG2INFO']['BIOLINK_VERSION']
     shell:
@@ -307,7 +309,6 @@ rule step11_split_data_train_val_test:
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', f"val_expert_demonstration_relation_entity_max{config['MODELINFO']['PARAMS']['MAX_PATH']}_filtered.pkl"),
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', f"test_expert_demonstration_relation_entity_max{config['MODELINFO']['PARAMS']['MAX_PATH']}_filtered.pkl")
     params:
-        n_random = 30,
         n_random_test_mrr_hk = 500,
         train_val_test_size = "[0.8, 0.1, 0.1]",
         seed = config['MODELINFO']['PARAMS']['SEED'],
@@ -323,7 +324,6 @@ rule step11_split_data_train_val_test:
                               --all_known_tps {input.all_known_tps} \
                               --filtered_expert_paths {input.filtered_expert_paths} \
                               --filtered_path_relation_entity {input.filtered_path_relation_entity} \
-                              --n_random {params.n_random} \
                               --n_random_test_mrr_hk {params.n_random_test_mrr_hk} \
                               --train_val_test_size '{params.train_val_test_size}' \
                               --seed {params.seed} \
@@ -339,13 +339,15 @@ rule step12_calculate_attribute_embedding:
     params:
         gpu = config['MODELINFO']['PARAMS']['GPU'],
         seed = config['MODELINFO']['PARAMS']['SEED'],
-        batch_size = 64
+        batch_size = 64,
+        pca_components = 80
     shell:
         """
         python {input.script} --node_info {input.node_info}  \
                               --gpu {params.gpu} \
                               --use_gpu \
                               --seed {params.seed} \
+                              --pca_components {params.pca_components} \
                               --batch_size {params.batch_size}
         """
 
@@ -367,7 +369,6 @@ rule step13_graphsage_data_generation:
     params:
         seed = config['MODELINFO']['PARAMS']['SEED'],
         feature_dim = 256,
-        process = 80,
         validation_percent = 0.3
     shell:
         """
@@ -378,7 +379,6 @@ rule step13_graphsage_data_generation:
                               --emb_file {input.emb_file} \
                               --seed {params.seed} \
                               --feature_dim {params.feature_dim} \
-                              --process {params.process} \
                               --validation_percent {params.validation_percent}
         """
 
@@ -389,17 +389,16 @@ rule step14_generate_random_walk:
     output:
         os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-walks.txt")
     params:
-        walk_length = 100,
+        walk_length = 30,
         number_of_walks = 10,
         batch_size = 200000,
-        process = 200
+        # process = 200
     shell:
         """
         python {input.script} --Gjson {input.Gjson}  \
                               --walk_length {params.walk_length} \
                               --number_of_walks {params.number_of_walks} \
-                              --batch_size {params.batch_size} \
-                              --process {params.process}
+                              --batch_size {params.batch_size}
         """
 
 rule step15_generate_graphsage_embedding:
@@ -409,7 +408,8 @@ rule step15_generate_graphsage_embedding:
         data_Gjson = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-G.json")),
         data_class_map = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-class_map.json")),
         data_id_map = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-id_map.json")),
-        data_feats = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-feats.npy"))
+        data_feats = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-feats.npy")),
+        data_walk = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-walks.txt"))
     output:
         os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.npy"),
         os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.txt")
@@ -418,13 +418,13 @@ rule step15_generate_graphsage_embedding:
         train_prefix = os.path.join(CURRENT_PATH, "data", "graphsage_input", "data"),
         model_size = "big",
         learning_rate = 0.001,
-        sample_size = 96,
-        dim_size = 256,
+        sample_size = 25,
+        dim_size = 128,
         model_type = "graphsage_mean",
         max_total_steps = 100000,
         validate_iter = 1000,
         batch_size = 512,
-        max_degree = 96
+        max_degree = 25
     shell:
         """
         {params.python27_path} -m graphsage.unsupervised_train --train_prefix {params.train_prefix} \
@@ -466,6 +466,7 @@ rule step17_pretrain_RF_model:
         val_pairs = ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_random_data_3class", "val_pairs.txt")),
         test_pairs = ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_random_data_3class", "test_pairs.txt")),
         random_pairs = ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_random_data_3class", "random_pairs.txt")),
+        unsuprvised_graphsage_entity_embeddings = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_output", "unsuprvised_graphsage_entity_embeddings.pkl")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data"))
     output:
         os.path.join(CURRENT_PATH, "models", "RF_model_3class", "RF_model.pt")
@@ -517,8 +518,8 @@ rule step19_pretrain_ac_model:
         output_folder = os.path.join(CURRENT_PATH, "models"),
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
         max_pre_path = 10000000,
-        bandwidth = config['MODELINFO']['PARAMS']['BANKWIDTH'],
-        bucket_interval = 50,
+        bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
+        bucket_interval = config['MODELINFO']['PARAMS']['BUCKET_INTERVAL'],
         state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
         seed = config['MODELINFO']['PARAMS']['SEED'],
         gpu = config['MODELINFO']['PARAMS']['GPU'],
@@ -565,8 +566,8 @@ rule step20_train_adac_model:
         path_trans_file_name = f"train_expert_transitions_history{config['MODELINFO']['PARAMS']['STATE_HISTORY']}.pkl",
         output_folder = os.path.join(CURRENT_PATH, "models"),
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
-        bandwidth = config['MODELINFO']['PARAMS']['BANKWIDTH'],
-        bucket_interval = 50,
+        bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
+        bucket_interval = config['MODELINFO']['PARAMS']['BUCKET_INTERVAL'],
         gpu = config['MODELINFO']['PARAMS']['GPU'],
         epochs = 100,
         train_batch_size = 1120,
@@ -620,8 +621,8 @@ rule step21_select_best_model:
     params:
         policy_net_folder = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net")),
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
-        bandwidth = config['MODELINFO']['PARAMS']['BANKWIDTH'],
-        bucket_interval = 50,
+        bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
+        bucket_interval = config['MODELINFO']['PARAMS']['BUCKET_INTERVAL'],
         state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
         act_dropout=0.5,
         seed = config['MODELINFO']['PARAMS']['SEED'],
@@ -651,12 +652,17 @@ rule step21_select_best_model:
 rule step22_split_disease_into_K_pieces:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "split_disease_into_K_pieces.py")),
-        data_dir = ancient(os.path.join(CURRENT_PATH, "data"))
+        data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
+        entity2freq = ancient(os.path.join(CURRENT_PATH, "data", 'entity2freq.txt')),
+        relation2freq = ancient(os.path.join(CURRENT_PATH, "data", 'relation2freq.txt')),
+        type2freq = ancient(os.path.join(CURRENT_PATH, "data", 'type2freq.txt')),
+        entity2typeid = ancient(os.path.join(CURRENT_PATH, "data", 'entity2typeid.pkl')),
+        all_node_info = ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')),
     output:
         os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")
     params:
         K = config['PARALLEL_PRECOMPUTE']['K'],
-        out_dir = os.path.join(CURRENT_PATH, "data")
+        out_dir = os.path.join(CURRENT_PATH, "data", "disease_sets")
     shell:
         """
         python {input.script} --data_dir {input.data_dir} \
@@ -670,11 +676,12 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
         ddp_model = ancient(os.path.join(CURRENT_PATH, "models", "RF_model_3class", "RF_model.pt")),
         moa_model = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
+        disease_set = ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
         model_dir = ancient(os.path.join(CURRENT_PATH, "models"))
     output:
-        os.path.join(CURRENT_PATH, "results", "path_results"),
-        os.path.join(CURRENT_PATH, "results", "prediction_scores"),
-        torch.load(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
+        # os.path.join(CURRENT_PATH, "results", "path_results"),
+        # os.path.join(CURRENT_PATH, "results", "prediction_scores"),
+        touch(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
     params:
         out_dir = os.path.join(CURRENT_PATH, 'results'),
         gpu_num = config['PARALLEL_PRECOMPUTE']['NUM_GPU'],
@@ -683,16 +690,18 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         N_paths = config['PARALLEL_PRECOMPUTE']['N_paths'],
         batch_size = config['PARALLEL_PRECOMPUTE']['BATCH_SIZE'],
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
-        bandwidth = config['MODELINFO']['PARAMS']['BANKWIDTH'],
-        bucket_interval = 50,
-        state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY']
+        bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
+        bucket_interval = config['MODELINFO']['PARAMS']['BUCKET_INTERVAL'],
+        state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
+        threshold = 0.5
     run:
-        for index in range(1, K+1):
-            this_gpu = index//gpu_num
-            shell(f"nohup python {input.script} --log_name run_xDTD_{this_gpu}.log \
+        process_per_gpu = int(params.K)//int(params.gpu_num)
+        for index in range(int(params.K)):
+            this_gpu = index//process_per_gpu
+            shell(f"nohup python {input.script} --log_name run_xDTD_{index+1}.log \
                               --data_path {input.data_dir} \
                               --model_path {input.model_dir} \
-                              --disease_set {input.data_dir}/disease_sets/disease_set{index}.txt \
+                              --disease_set {input.data_dir}/disease_sets/disease_set{index+1}.txt \
                               --out_dir {params.out_dir} \
                               --gpu {this_gpu} \
                               --N_drugs {params.N_drugs} \
@@ -702,8 +711,8 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
                               --bandwidth {params.bandwidth} \
                               --bucket_interval {params.bucket_interval} \
                               --state_history {params.state_history} \
-                              --use_gpu \
-                              --save_pred_paths &")
+                              --use_gpu  \
+                              --threshold {params.threshold} &")
 
 rule step24_build_sql_database:
     input:
@@ -713,7 +722,7 @@ rule step24_build_sql_database:
     output:
         os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
     params:
-        database_name = config['DATABASE']['DATABASE_NAME']
+        database_name = config['DATABASE']['DATABASE_NAME'],
         outdir = CURRENT_PATH
     shell:
         """
@@ -721,5 +730,29 @@ rule step24_build_sql_database:
                               --path_to_score_results {input.path_to_score_results} \
                               --path_to_path_results {input.path_to_path_results} \
                               --database_name {params.database_name} \
+                              --outdir {params.outdir}
+        """
+
+rule step25_build_mapping_database:
+    input:
+        script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_mapping_db.py")),
+        tsv_node_unused = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv", "nodes_c.tsv")),
+        tsv_edge_unused = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv", "edges_c.tsv")),
+        kgml_xdtd_data_entity2freq_unused = ancient(os.path.join(CURRENT_PATH, "data", "entity2freq.txt")),
+        kgml_xdtd_data_graph_edges_unused = ancient(os.path.join(CURRENT_PATH, "data", "graph_edges.txt")),
+        xdtd_db_path = ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
+    output:
+        os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
+    params:
+        database_name = config['DATABASE']['DATABASE_NAME'],
+        outdir = CURRENT_PATH,
+        tsv_path = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv")),
+        kgml_xdtd_data_path = ancient(os.path.join(CURRENT_PATH, "data"))
+    shell:
+        """
+        python {input.script} --build \
+                              --tsv_path ${params.tsv_path} \
+                              --kgml_xdtd_data_path ${params.kgml_xdtd_data_path} \
+                              --database_name ${params.database_name} \
                               --outdir {params.outdir}
         """
