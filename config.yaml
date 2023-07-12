@@ -7,10 +7,13 @@ RTXINFO:
 ZENODOINFO:
   LINK: "https://zenodo.org/record/7582233"
   TRAINING_DATA: "training_data.tar.gz"
+
+DRUGMECHDBINFO:
+  LINK: "https://raw.githubusercontent.com/SuLab/DrugMechDB/main/"
   DRUGMECHDB_PATH: "indication_paths.yaml"
 
 KG2INFO:
-  BIOLINK_VERSION: "3.0.0"
+  BIOLINK_VERSION: "3.1.2"
   PUBLICATION_CUTOFF: 10
   NGD_CUTOFF: 0.6
 
