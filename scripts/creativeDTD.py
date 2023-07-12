@@ -38,7 +38,7 @@ class creativeDTD:
         self.args.type2id, self.args.id2type = utils.load_index(os.path.join(self.args.data_dir, 'type2freq.txt'))
         with open(os.path.join(self.args.data_dir, 'entity2typeid.pkl'), 'rb') as infile:
             self.args.entity2typeid = pickle.load(infile)
-        drug_type = ['biolink:Drug', 'biolink:SmallMolecule']
+        drug_type = ['biolink:Drug', 'biolink:SmallMolecule','biolink:ChemicalEntity']
         drug_type_ids = [self.args.type2id[x] for x in drug_type]
         self.drug_curie_ids = [self.args.id2entity[index] for index, typeid in enumerate(self.args.entity2typeid) if typeid in drug_type_ids]
 

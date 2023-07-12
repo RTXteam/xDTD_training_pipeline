@@ -23,7 +23,7 @@ def map_to_graph(row):
             res = synonymizer.get_canonical_curies(drug)[drug]
         except:
             res = None
-        preferred_drug_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Drug' or res['preferred_category']=='biolink:SmallMolecule') else None
+        preferred_drug_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Drug' or res['preferred_category']=='biolink:SmallMolecule' or res['preferred_category'] =='biolink:ChemicalEntity') else None
         try:
             res = synonymizer.get_canonical_curies(disease)[disease]
         except:
@@ -36,7 +36,7 @@ def map_to_graph(row):
             res = synonymizer.get_canonical_curies(drug)[drug]
         except:
             res = None
-        preferred_drug_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Drug' or res['preferred_category']=='biolink:SmallMolecule') else None
+        preferred_drug_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Drug' or res['preferred_category']=='biolink:SmallMolecule' or res['preferred_category'] =='biolink:ChemicalEntity') else None
         try:
             res = synonymizer.get_canonical_curies(disease)[disease]
         except:
@@ -87,7 +87,7 @@ if __name__ == '__main__':
     conn = utils.Neo4jConnection(uri=neo4j_bolt, user=neo4j_username, pwd=neo4j_password)
 
     ## add existing 'treat' edge between drug and disease node pair in canonicalized kg
-    query = f"match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and (m1.id in disease_ids and m2.id in drug_ids and (r.predicate='biolink:treats' or r.predicate='biolink:disrupts' or r.predicate='biolink:prevents')) with distinct m1 as node1, m2 as node2 return node2.id as source, node1.id as target"
+    query = f"match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule' or drug.category='biolink:ChemicalEntity') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and (m1.id in disease_ids and m2.id in drug_ids and (r.predicate='biolink:treats' or r.predicate='biolink:disrupts' or r.predicate='biolink:prevents')) with distinct m1 as node1, m2 as node2 return node2.id as source, node1.id as target"
     temp = conn.query(query)
     temp.columns = ['source', 'target']
     for row in range(len(temp)):
@@ -105,7 +105,7 @@ if __name__ == '__main__':
                 del temp_dict[source_curie, target_curie]
 
     ## add existing 'not treat' edge between drug and disease node pair in canonicalized kg
-    query = f"match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and (m1.id in disease_ids and m2.id in drug_ids and (r.predicate='biolink:causes' or r.predicate='biolink:predisposes' or r.predicate='biolink:contraindicated_for' or r.predicate='biolink:produces' or r.predicate='biolink:causes_adverse_event')) with distinct m1 as node1, m2 as node2 return node2.id as source, node1.id as target"
+    query = f"match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule' or drug.category='biolink:ChemicalEntity') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and (m1.id in disease_ids and m2.id in drug_ids and (r.predicate='biolink:causes' or r.predicate='biolink:predisposes' or r.predicate='biolink:contraindicated_for' or r.predicate='biolink:produces' or r.predicate='biolink:causes_adverse_event')) with distinct m1 as node1, m2 as node2 return node2.id as source, node1.id as target"
     temp = conn.query(query)
     temp.columns = ['source', 'target']
     for row in range(len(temp)):
@@ -243,7 +243,7 @@ if __name__ == '__main__':
                     del id_list_class_dict[source_curie, target_curie]
 
     ## add existing 'treat' edge between drug and disease node pair in canonicalized kg
-    query = f"match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and (m1.id in disease_ids and m2.id in drug_ids and (r.predicate='biolink:treats' or r.predicate='biolink:disrupts' or r.predicate='biolink:prevents')) with distinct m1 as node1, m2 as node2 return node2.id as source, node1.id as target"
+    query = f"match (disease) where (disease.category='biolink:Disease' or disease.category='biolink:PhenotypicFeature' or disease.category='biolink:BehavioralFeature' or disease.category='biolink:DiseaseOrPhenotypicFeature') with collect(distinct disease.id) as disease_ids match (drug) where (drug.category='biolink:Drug' or drug.category='biolink:SmallMolecule' or drug.category='biolink:ChemicalEntity') with collect(distinct drug.id) as drug_ids, disease_ids as disease_ids match (m1)<-[r]-(m2) where m1<>m2 and (m1.id in disease_ids and m2.id in drug_ids and (r.predicate='biolink:treats' or r.predicate='biolink:disrupts' or r.predicate='biolink:prevents')) with distinct m1 as node1, m2 as node2 return node2.id as source, node1.id as target"
     temp = conn.query(query)
     temp.columns = ['source', 'target']
     for row in range(len(temp)):

@@ -105,12 +105,13 @@ rule step2_download_trainingdata:
         os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['DRUGMECHDB_PATH'])
     params:
         zenodo_link = config['ZENODOINFO']['LINK'],
+        drugmechdb_link = config['DRUGMECHDBINFO']['LINK'],
         training_data = config['ZENODOINFO']['TRAINING_DATA'],
         drugmechdb_path = config['ZENODOINFO']['DRUGMECHDB_PATH']
     run:
         shell("curl {params.zenodo_link}/files/{params.training_data} -o ./data/{params.training_data}"),
         shell("tar zxvf ./data/{params.training_data} -C ./data/"),
-        shell("curl {params.zenodo_link}/files/{params.drugmechdb_path} -o ./data/{params.drugmechdb_path}")
+        shell("curl {params.drugmechdb_link}/{params.drugmechdb_path} -o ./data/{params.drugmechdb_path}")
 
 rule step3_download_data_and_kg2:
     input:

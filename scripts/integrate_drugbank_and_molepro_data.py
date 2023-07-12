@@ -234,7 +234,7 @@ if __name__ == '__main__':
         conn = utils.Neo4jConnection(uri=neo4j_bolt, user=neo4j_username, pwd=neo4j_password)
 
         ## extract all possible drug entities from neo4j database
-        res = conn.query(f"match (n) where n.category='biolink:SmallMolecule' or n.category='biolink:Drug' return distinct n.id, n.category, n.equivalent_curies")    
+        res = conn.query(f"match (n) where n.category='biolink:SmallMolecule' or n.category='biolink:ChemicalEntity' or n.category='biolink:Drug' return distinct n.id, n.category, n.equivalent_curies")    
         res.columns = ['id','category','equivalent_curies']
         res.to_csv(os.path.join(args.output_folder, 'expert_path_files', 'all_drugs.txt'), sep='\t', index=None)
     else:
