@@ -10,7 +10,6 @@ pathlist = os.getcwd().split(os.path.sep)
 ROOTindex = pathlist.index("xDTD_training_pipeline")
 ROOTPath = os.path.sep.join([*pathlist[:(ROOTindex + 1)]])
 sys.path.append(os.path.join(ROOTPath, 'scripts'))
-import utils
 
 
 def get_database_subpath(path: str):
@@ -34,8 +33,6 @@ if __name__ == '__main__':
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
-    logger.info(args)
     output_path = args.output_folder
 
     ## Load the contents of two config files (e.g., config_dbs.json and config_secrets.json)
@@ -54,6 +51,11 @@ if __name__ == '__main__':
     curie_to_pmids_name = curie_to_pmids_path.split('/')[-1]
     if not os.path.exists(os.path.join(ROOTPath, "data", curie_to_pmids_name)):
         os.system(f"scp {get_remote_location(curie_to_pmids_path)} {os.path.join(ROOTPath, 'data', curie_to_pmids_name)}")
+
+
+    import utils
+    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    logger.info(args)
 
     ## Connect to neo4j database
     neo4j_instance = config_dbs["neo4j"]["KG2c"]
