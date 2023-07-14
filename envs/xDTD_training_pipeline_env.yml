@@ -15,6 +15,7 @@ dependencies:
   - requests=2.27.1
   - pip
   - setuptools=58.0.4
+  - biothings_client
   - transformers
   - xmltodict
   - nltk
@@ -30,6 +31,7 @@ dependencies:
     - ipython
     - neo4j==4.4.1
     - pandas
+    - biothings-client
     - requests-cache
     - scikit-learn==1.0.2
     - scipy==1.8.0
