@@ -9,7 +9,7 @@ ZENODOINFO:
   TRAINING_DATA: "training_data.tar.gz"
 
 DRUGMECHDBINFO:
-  LINK: "https://raw.githubusercontent.com/SuLab/DrugMechDB/main/"
+  LINK: "https://raw.githubusercontent.com/SuLab/DrugMechDB/main"
   DRUGMECHDB_PATH: "indication_paths.yaml"
 
 KG2INFO:
