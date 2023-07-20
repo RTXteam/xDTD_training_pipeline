@@ -90,7 +90,7 @@ if __name__ == "__main__":
             filtered_drug_nodes += [(drug_curie, False)]
 
     ## group all drug results together and save it to a pkl file
-    existing_drug_curies = pd.concat([pd.read_csv(f"{args.data_dir}/filtered_drugs/{x}", sep='\t', header=0) for x in os.listdir(os.path.join(out_dir, 'filtered_drugs'))]).reset_index(drop=True)
+    existing_drug_curies = pd.concat([pd.read_csv(f"{args.data_dir}/filtered_drugs/{x}", sep='\t', header=0) for x in os.listdir(os.path.join(args.data_dir, 'filtered_drugs'))]).reset_index(drop=True)
     existing_drug_curies = list(existing_drug_curies.query("has_rxcui == True")['curie'])
     with open(os.path.join(args.data_dir, 'filtered_drug_nodes_for_precomputation.pkl'), 'wb') as f:
         pickle.dump(existing_drug_curies, f)
