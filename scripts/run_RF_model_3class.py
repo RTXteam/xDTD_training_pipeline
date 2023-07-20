@@ -13,7 +13,6 @@ import argparse
 import joblib
 from glob import glob
 from sklearn.model_selection import GridSearchCV
-import utils
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)

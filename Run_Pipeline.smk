@@ -29,7 +29,7 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['SECRET_CONFIGFILE'])),
         ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA'])),
-        ancient(os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['DRUGMECHDB_PATH'])),
+        ancient(os.path.join(CURRENT_PATH, "data", config['DRUGMECHDBINFO']['DRUGMECHDB_PATH'])),
         ancient(os.path.join(CURRENT_PATH, "data", 'graph_edges.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt')),
@@ -78,9 +78,9 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, "models", "pretrain_AC_model", "pretrained_ac_model.pt")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "policy_model_epoch51.pt")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
-        ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
-        ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
-        ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
+        # ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
+        # ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
+        # ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
 
 
 
@@ -102,12 +102,12 @@ rule step1_download_RTXconfig:
 rule step2_download_trainingdata:
     output:
         os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA']),
-        os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['DRUGMECHDB_PATH'])
+        os.path.join(CURRENT_PATH, "data", config['DRUGMECHDBINFO']['DRUGMECHDB_PATH'])
     params:
         zenodo_link = config['ZENODOINFO']['LINK'],
         drugmechdb_link = config['DRUGMECHDBINFO']['LINK'],
         training_data = config['ZENODOINFO']['TRAINING_DATA'],
-        drugmechdb_path = config['ZENODOINFO']['DRUGMECHDB_PATH']
+        drugmechdb_path = config['DRUGMECHDBINFO']['DRUGMECHDB_PATH']
     run:
         shell("curl {params.zenodo_link}/files/{params.training_data} -o ./data/{params.training_data}"),
         shell("tar zxvf ./data/{params.training_data} -C ./data/"),
@@ -157,6 +157,12 @@ rule step5_generate_tp_and_tn_pairs:
         secret_configfile = ancient(config['RTXINFO']['SECRET_CONFIGFILE']),
         db_configfile = ancient(config['RTXINFO']['DB_CONFIGFILE']),
         graph_edges = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt')),
+        training_data_unused = ancient(os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA'])),
+    output:
+        os.path.join(CURRENT_PATH, "data", 'tp_pairs.txt'),
+        os.path.join(CURRENT_PATH, "data", 'tn_pairs.txt'),
+        os.path.join(CURRENT_PATH, "data", 'all_known_tps.txt'),
+    params:
         mychem_tp = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['TP']['MYCHEM'])),
         semmed_tp = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['TP']['SEMMED'])),
         ndf_tp = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['TP']['NDF'])),
@@ -165,11 +171,6 @@ rule step5_generate_tp_and_tn_pairs:
         semmed_tn = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['TN']['SEMMED'])),
         ndf_tn = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['TN']['NDF'])),
         repoDB_tn = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['TN']['REPODB'])),
-    output:
-        os.path.join(CURRENT_PATH, "data", 'tp_pairs.txt'),
-        os.path.join(CURRENT_PATH, "data", 'tn_pairs.txt'),
-        os.path.join(CURRENT_PATH, "data", 'all_known_tps.txt'),
-    params:
         cutoff = config['KG2INFO']['PUBLICATION_CUTOFF'],
         ngdcutoff = config['KG2INFO']['NGD_CUTOFF']
     shell:
@@ -177,8 +178,8 @@ rule step5_generate_tp_and_tn_pairs:
         python {input.script} --db_config_path {input.db_configfile} \
                               --secret_config_path {input.secret_configfile} \
                               --graph {input.graph_edges} \
-                              --tp {input.mychem_tp} {input.semmed_tp} {input.ndf_tp} {input.repoDB_tp} \
-                              --tn {input.mychem_tn} {input.semmed_tn} {input.ndf_tn} {input.repoDB_tn} \
+                              --tp {params.mychem_tp} {params.semmed_tp} {params.ndf_tp} {params.repoDB_tp} \
+                              --tn {params.mychem_tn} {params.semmed_tn} {params.ndf_tn} {params.repoDB_tn} \
                               --tncutoff {params.cutoff} \
                               --tpcutoff {params.cutoff} \
                               --ngdcutoff {params.ngdcutoff}        
@@ -233,8 +234,7 @@ rule step8_integrate_drugbank_and_molepro_data:
         """
         python {input.script} --db_config_path {input.db_configfile} \
                               --secret_config_path {input.secret_configfile} \
-                              --drugbank_export_paths {input.drugbank_export_paths} \
-                              --molepro_api_link {params.molepro_api_link}
+                              --drugbank_export_paths {input.drugbank_export_paths}
         """
 
 rule step9_check_reachable:
@@ -685,7 +685,6 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         touch(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
     params:
         out_dir = os.path.join(CURRENT_PATH, 'results'),
-        gpu_num = config['PARALLEL_PRECOMPUTE']['NUM_GPU'],
         K = config['PARALLEL_PRECOMPUTE']['K'],
         N_drugs = config['PARALLEL_PRECOMPUTE']['N_drugs'],
         N_paths = config['PARALLEL_PRECOMPUTE']['N_paths'],
@@ -694,17 +693,14 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
         bucket_interval = config['MODELINFO']['PARAMS']['BUCKET_INTERVAL'],
         state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
-        threshold = 0.5
+        threshold = 0.3
     run:
-        process_per_gpu = int(params.K)//int(params.gpu_num)
         for index in range(int(params.K)):
-            this_gpu = index//process_per_gpu
             shell(f"nohup python {input.script} --log_name run_xDTD_{index+1}.log \
                               --data_path {input.data_dir} \
                               --model_path {input.model_dir} \
                               --disease_set {input.data_dir}/disease_sets/disease_set{index+1}.txt \
                               --out_dir {params.out_dir} \
-                              --gpu {this_gpu} \
                               --N_drugs {params.N_drugs} \
                               --N_paths {params.N_paths} \
                               --batch_size {params.batch_size} \
@@ -712,7 +708,6 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
                               --bandwidth {params.bandwidth} \
                               --bucket_interval {params.bucket_interval} \
                               --state_history {params.state_history} \
-                              --use_gpu  \
                               --threshold {params.threshold} &")
 
 rule step24_build_sql_database:

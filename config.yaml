@@ -45,9 +45,8 @@ MODELINFO:
     LEARNING_RATE: 0.0005
     
 PARALLEL_PRECOMPUTE:
-  K: 16
-  NUM_GPU: 4
-  N_drugs: 200
+  K: 50
+  N_drugs: 300
   N_paths: 50
   BATCH_SIZE: 200
 
