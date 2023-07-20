@@ -33,7 +33,7 @@ MODELINFO:
     
 PARALLEL_PRECOMPUTE:
   K: 50 ## You may need to consider your machine RAM to set this parameter. We have 3T RAM to allow it to be 50.
-  N_drugs: 200
+  N_drugs: 300
   N_paths: 50
   BATCH_SIZE: 200
 
