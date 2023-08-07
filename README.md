@@ -33,7 +33,7 @@ MODELINFO:
     
 PARALLEL_PRECOMPUTE:
   K: 50 ## You may need to consider your machine RAM to set this parameter. We have 3T RAM to allow it to be 50.
-  N_drugs: 300
+  N_drugs: 150
   N_paths: 50
   BATCH_SIZE: 200
 
@@ -49,6 +49,8 @@ You can run the following command to run the pipeline:
 ```
 nohup snakemake --cores 16 -s Run_Pipeline.smk targets &
 ```
+
+__Please note that the last two steps (e.g., steps 24 and 25) can't be automatically executed in the pipeline since step 23 needs to be run in the background. I have commented the steps 24 and 25. Once step 23 is done, please comment out the steps 24 and 25 part in Run_Pipeline.smk and run the above command again__
 
 ## More Descriptions About Each Step in the Pipeline
 

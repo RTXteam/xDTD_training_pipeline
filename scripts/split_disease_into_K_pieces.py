@@ -32,9 +32,10 @@ if __name__ == "__main__":
         config_dbs = json.load(file_in)
 
     ## set up output folder
-    logger.info(f"Output Directory: {args.out_dir}")
-    if not os.path.exists(args.out_dir):
-        os.makedirs(args.out_dir)
+    out_dir = os.path.join(args.data_dir, 'disease_sets')
+    logger.info(f"Output Directory: {out_dir}")
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir)
 
     ## load datasets
     logger.info(f"Load datasets from {args.data_dir}")
@@ -56,10 +57,12 @@ if __name__ == "__main__":
     logger.info(f"Split disease into {args.K} pieces")
     disease_meta_info_K = [disease_meta_info.loc[indices,:] for indices in np.array_split(np.array(disease_meta_info.sample(frac=1).index), args.K)]
     for index, df in enumerate(disease_meta_info_K):
-        df.to_csv(os.path.join(args.out_dir, f'disease_set{index+1}.txt'), sep='\t', index=None)
+        df.to_csv(os.path.join(out_dir, f'disease_set{index+1}.txt'), sep='\t', index=None)
 
     ## get drug info
-    drug_nodes = list(set(all_graph_nodes_info.query(f"category in {['biolink:Drug','biolink:SmallMolecule','biolink:ChemicalEntity']}")['id']))
+    drug_type = ['biolink:Drug','biolink:SmallMolecule','biolink:ChemicalEntity']
+    drug_type_ids = [type2id[x] for x in drug_type]
+    drug_nodes = [id2entity[index] for index, typeid in enumerate(entity2typeid) if typeid in drug_type_ids]
 
     ###### Use DrugConflator to filter drugs that has RxCUI ids
     node_synonymizer_path = config_dbs["database_downloads"]["node_synonymizer"]
@@ -88,6 +91,9 @@ if __name__ == "__main__":
             filtered_drug_nodes += [(drug_curie, True)]
         else:
             filtered_drug_nodes += [(drug_curie, False)]
+    if len(filtered_drug_nodes) != 0:
+        out_df = pd.DataFrame(filtered_drug_nodes, columns = ['curie', 'has_rxcui'])
+        out_df.to_csv(os.path.join(args.data_dir, 'filtered_drugs', f"batch_{int(index/1000)+1}.tsv"), sep = '\t', index=False)
 
     ## group all drug results together and save it to a pkl file
     existing_drug_curies = pd.concat([pd.read_csv(f"{args.data_dir}/filtered_drugs/{x}", sep='\t', header=0) for x in os.listdir(os.path.join(args.data_dir, 'filtered_drugs'))]).reset_index(drop=True)

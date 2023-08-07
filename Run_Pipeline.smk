@@ -78,9 +78,11 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, "models", "pretrain_AC_model", "pretrained_ac_model.pt")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "policy_model_epoch51.pt")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
-        # ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
-        # ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
-        # ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
+        ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
+        ancient(os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl")),
+        ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
+        # ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])),
+        # ancient(os.path.join(CURRENT_PATH, "results", "step25_done.txt")),
 
 
 
@@ -659,8 +661,10 @@ rule step22_split_disease_into_K_pieces:
         type2freq = ancient(os.path.join(CURRENT_PATH, "data", 'type2freq.txt')),
         entity2typeid = ancient(os.path.join(CURRENT_PATH, "data", 'entity2typeid.pkl')),
         all_node_info = ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')),
+        db_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE']))
     output:
-        os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")
+        os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt"),
+        os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl"),
     params:
         K = config['PARALLEL_PRECOMPUTE']['K'],
         out_dir = os.path.join(CURRENT_PATH, "data", "disease_sets")
@@ -668,7 +672,7 @@ rule step22_split_disease_into_K_pieces:
         """
         python {input.script} --data_dir {input.data_dir} \
                               --K {params.K} \
-                              --out_dir {params.out_dir}
+                              --db_config_path {input.db_configfile}
         """
 
 rule step23_precompute_all_drug_disease_pairs_in_parallel:
@@ -677,7 +681,8 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
         ddp_model = ancient(os.path.join(CURRENT_PATH, "models", "RF_model_3class", "RF_model.pt")),
         moa_model = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
-        disease_set = ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
+        disease_set1 = ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
+        disease_set2 = ancient(os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl")),
         model_dir = ancient(os.path.join(CURRENT_PATH, "models"))
     output:
         # os.path.join(CURRENT_PATH, "results", "path_results"),
@@ -710,45 +715,46 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
                               --state_history {params.state_history} \
                               --threshold {params.threshold} &")
 
-rule step24_build_sql_database:
-    input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_sql_database.py")),
-        path_to_score_results = ancient(os.path.join(CURRENT_PATH, "data", "path_results")),
-        path_to_path_results = ancient(os.path.join(CURRENT_PATH, "data", "prediction_scores"))
-    output:
-        os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
-    params:
-        database_name = config['DATABASE']['DATABASE_NAME'],
-        outdir = CURRENT_PATH
-    shell:
-        """
-        python {input.script} --build \
-                              --path_to_score_results {input.path_to_score_results} \
-                              --path_to_path_results {input.path_to_path_results} \
-                              --database_name {params.database_name} \
-                              --outdir {params.outdir}
-        """
+# rule step24_build_sql_database:
+#     input:
+#         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_sql_database.py")),
+#         unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
+#     output:
+#         os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
+#     params:
+#         path_to_score_results = os.path.join(CURRENT_PATH, "results", "path_results"),
+#         path_to_path_results = os.path.join(CURRENT_PATH, "results", "prediction_scores"),
+#         database_name = config['DATABASE']['DATABASE_NAME'],
+#         outdir = CURRENT_PATH
+#     shell:
+#         """
+#         python {input.script} --build \
+#                               --path_to_score_results {params.path_to_score_results} \
+#                               --path_to_path_results {params.path_to_path_results} \
+#                               --database_name {params.database_name} \
+#                               --outdir {params.outdir}
+#         """
 
-rule step25_build_mapping_database:
-    input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_mapping_db.py")),
-        tsv_node_unused = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv", "nodes_c.tsv")),
-        tsv_edge_unused = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv", "edges_c.tsv")),
-        kgml_xdtd_data_entity2freq_unused = ancient(os.path.join(CURRENT_PATH, "data", "entity2freq.txt")),
-        kgml_xdtd_data_graph_edges_unused = ancient(os.path.join(CURRENT_PATH, "data", "graph_edges.txt")),
-        xdtd_db_path = ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
-    output:
-        os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
-    params:
-        database_name = config['DATABASE']['DATABASE_NAME'],
-        outdir = CURRENT_PATH,
-        tsv_path = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv")),
-        kgml_xdtd_data_path = ancient(os.path.join(CURRENT_PATH, "data"))
-    shell:
-        """
-        python {input.script} --build \
-                              --tsv_path ${params.tsv_path} \
-                              --kgml_xdtd_data_path ${params.kgml_xdtd_data_path} \
-                              --database_name ${params.database_name} \
-                              --outdir {params.outdir}
-        """
+# rule step26_build_mapping_database:
+#     input:
+#         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_mapping_db.py")),
+#         db_configfile = ancient(config['RTXINFO']['DB_CONFIGFILE']),
+#         kgml_xdtd_data_entity2freq_unused = ancient(os.path.join(CURRENT_PATH, "data", "entity2freq.txt")),
+#         kgml_xdtd_data_graph_edges_unused = ancient(os.path.join(CURRENT_PATH, "data", "graph_edges.txt")),
+#         unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
+#         database_name = ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
+#     output:
+#         touch(os.path.join(CURRENT_PATH, "results", "step25_done.txt"))
+#     params:
+#         outdir = CURRENT_PATH,
+#         tsv_path = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv")),
+#         kgml_xdtd_data_path = ancient(os.path.join(CURRENT_PATH, "data"))
+#     shell:
+#         """
+#         python {input.script} --build \
+#                               --db_config_path {input.db_configfile} \
+#                               --tsv_path ${params.tsv_path} \
+#                               --kgml_xdtd_data_path ${params.kgml_xdtd_data_path} \
+#                               --database_name ${input.database_name} \
+#                               --outdir {params.outdir}
+#         """

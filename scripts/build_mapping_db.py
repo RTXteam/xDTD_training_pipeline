@@ -13,6 +13,7 @@ import sqlite3
 import csv
 csv.field_size_limit(sys.maxsize)
 import collections
+import json
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -282,6 +283,7 @@ class xDTDMappingDB():
 
 def main():
     parser = argparse.ArgumentParser(description="Tests or builds the KGML-xDTD model Mapping Database", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--db_config_path", type=str, help="path to database config file", default="../config_dbs.json")
     parser.add_argument('--build', action="store_true", required=False, help="If set, (re)build the index from scratch", default=False)
     parser.add_argument('--test', action="store_true", required=False, help="If set, run a test of database by doing several lookups", default=False)
     parser.add_argument('--tsv_path', type=str, required=True, help="Path to a folder containing the KG2 graph TSV files")
@@ -296,6 +298,18 @@ def main():
 
     # To (re)build
     if args.build:
+        ## Download data from arax-databases.rtx.ai first
+        with open(args.db_config_path, 'rb') as file_in:
+            config_dbs = json.load(file_in)
+        kg2name = config_dbs["neo4j"]["KG2c"].replace('c.rtx.ai','').upper().replace('-','.')
+        if not os.path.exists(os.path.join(ROOTPath, "data", 'kg2c-tsv.tar.gz')):
+            os.system(f"scp rtxconfig@arax-databases.rtx.ai:~/{kg2name}/extra_files/kg2c-tsv.tar.gz {os.path.join(ROOTPath, 'data', 'kg2c-tsv.tar.gz')}")
+        ## De-compress kg2c-tsv.tar.gz
+        if not os.path.exists(os.path.join(ROOTPath, 'data', 'kg2c-tsv')):
+            os.makedirs(os.path.join(ROOTPath, 'data', 'kg2c-tsv'))
+        if not os.path.exists(os.path.join(ROOTPath, "data", 'kg2c-tsv', 'edges_c.tsv')):
+            os.system(f"tar -zxvf {os.path.join(ROOTPath, 'data', 'kg2c-tsv.tar.gz')} -C {os.path.join(ROOTPath, 'data', 'kg2c-tsv')}")
+        args.tsv_path = os.path.join(ROOTPath, 'data', 'kg2c-tsv')    
         db = xDTDMappingDB(args.kgml_xdtd_data_path, args.tsv_path, args.database_name, args.outdir, mode='build', db_loc=None)
         print("==== Creating tables ====", flush=True)
         db.create_tables()
