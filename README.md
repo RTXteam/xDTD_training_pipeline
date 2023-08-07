@@ -18,6 +18,9 @@ You need to have permission to access the latest `config_dbs.json` and `config_s
 ## Modify the `config.yaml` File
 You may need to change the following parameters in the `config.yaml` before you run the pipeline:
 ```yaml
+RTXINFO:
+  GITHUB_LINK: " https://raw.githubusercontent.com/RTXteam/RTX/master" ## you might need to change this linke to specific branch that has correct config_secrets.json and config_dbs.json
+
 KG2INFO:
   BIOLINK_VERSION: "3.1.2" ## change this according to what biolink version from which the KG2 that you uses was built.
 
