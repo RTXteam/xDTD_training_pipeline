@@ -13,15 +13,15 @@ dependencies:
   - numpy=1.21
   - pytorch=1.10.2
   - requests=2.27.1
-  - pip
+  - pip=23.1
   - setuptools=58.0.4
   - biothings_client
-  - transformers
-  - xmltodict
-  - nltk
-  - pattern
-  - httpx
-  - snakemake
+  - transformers=4.29
+  - xmltodict=0.13
+  - nltk=3.8
+  - pattern=3.6
+  - httpx=0.23
+  - snakemake=7.25.4
   - pip:
     - beautifulsoup4
     - biopython
