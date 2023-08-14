@@ -735,7 +735,7 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
 #                               --outdir {params.outdir}
 #         """
 
-# rule step26_build_mapping_database:
+# rule step25_build_mapping_database:
 #     input:
 #         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_mapping_db.py")),
 #         db_configfile = ancient(config['RTXINFO']['DB_CONFIGFILE']),
