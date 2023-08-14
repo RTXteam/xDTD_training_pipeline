@@ -722,8 +722,8 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
 #     output:
 #         os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
 #     params:
-#         path_to_score_results = os.path.join(CURRENT_PATH, "results", "path_results"),
-#         path_to_path_results = os.path.join(CURRENT_PATH, "results", "prediction_scores"),
+#         path_to_score_results = os.path.join(CURRENT_PATH, "results", "prediction_scores"),
+#         path_to_path_results = os.path.join(CURRENT_PATH, "results", "path_results"),
 #         database_name = config['DATABASE']['DATABASE_NAME'],
 #         outdir = CURRENT_PATH
 #     shell:
