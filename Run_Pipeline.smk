@@ -208,8 +208,8 @@ rule step6_preprocess_data:
 rule step7_process_drugbank_action_desc:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "process_drugbank_action_desc.py")),
-        secret_configfile = ancient(config['RTXINFO']['SECRET_CONFIGFILE']),
-        db_configfile = ancient(config['RTXINFO']['DB_CONFIGFILE']),
+        secret_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['SECRET_CONFIGFILE'])),
+        db_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE'])),
         drugbank_xml = ancient(os.path.join(CURRENT_PATH, "data", config['TRAINING_DATA']['DRUGBANK_XML']))
     output:
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'drugbank_dict.pkl'),
@@ -224,8 +224,8 @@ rule step7_process_drugbank_action_desc:
 rule step8_integrate_drugbank_and_molepro_data:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "integrate_drugbank_and_molepro_data.py")),
-        secret_configfile = ancient(config['RTXINFO']['SECRET_CONFIGFILE']),
-        db_configfile = ancient(config['RTXINFO']['DB_CONFIGFILE']),
+        secret_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['SECRET_CONFIGFILE'])),
+        db_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE'])),
         drugbank_export_paths = ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'p_expert_paths.txt'))
     output:
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'all_drugs.txt'),
