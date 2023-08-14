@@ -156,8 +156,8 @@ rule step4_filtered_graph_nodes_and_edges:
 rule step5_generate_tp_and_tn_pairs:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_tp_tn_pairs.py")),
-        secret_configfile = ancient(config['RTXINFO']['SECRET_CONFIGFILE']),
-        db_configfile = ancient(config['RTXINFO']['DB_CONFIGFILE']),
+        secret_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['SECRET_CONFIGFILE'])),
+        db_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE'])),
         graph_edges = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt')),
         training_data_unused = ancient(os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA'])),
     output:
