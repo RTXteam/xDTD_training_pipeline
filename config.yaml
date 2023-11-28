@@ -5,7 +5,7 @@ RTXINFO:
   DB_CONFIGFILE: "config_dbs.json"
 
 ZENODOINFO:
-  LINK: "https://zenodo.org/record/7582233"
+  LINK: "https://zenodo.org/records/7582233"
   TRAINING_DATA: "training_data.tar.gz"
 
 DRUGMECHDBINFO:
@@ -32,7 +32,7 @@ TRAINING_DATA:
     NDF: training_data/ndf_tn.txt
     REPODB: training_data/repoDB_tn.txt
   DRUGBANK_XML: drugbank.xml
-  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.3
+  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.4
 
 MODELINFO:
   PARAMS:
