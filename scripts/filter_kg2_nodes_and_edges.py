@@ -22,6 +22,7 @@ def calculate_ngd(concept_pubmed_ids):
 
     if concept_pubmed_ids[0] is None or concept_pubmed_ids[1] is None:
         return None
+    concept_pubmed_ids = (eval(concept_pubmed_ids[0]),eval(concept_pubmed_ids[1]))
 
     marginal_counts = list(map(lambda pmid_list: len(set(pmid_list)), concept_pubmed_ids))
     joint_count = len(set(concept_pubmed_ids[0]).intersection(set(concept_pubmed_ids[1])))
@@ -33,7 +34,7 @@ def calculate_ngd(concept_pubmed_ids):
     else:
         try:
             return (max([math.log(count) for count in marginal_counts]) - math.log(joint_count)) / \
-                (math.log(utils.NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
+                (math.log(NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
         except ValueError:
             return None
 
@@ -77,7 +78,7 @@ if __name__ == '__main__':
         curie_to_pmids_name = curie_to_pmids_path.split('/')[-1]
     cnx = sqlite3.connect(os.path.join(ROOTPath, "data", curie_to_pmids_name))
     temp_df = pd.read_sql_query("SELECT * FROM curie_to_pmids", cnx)
-    curie_to_pmids_dict = {curie:eval(pmid_list) for curie, pmid_list in tqdm(temp_df.to_numpy())}
+    curie_to_pmids_dict = dict(zip(temp_df['curie'], temp_df['pmids']))
 
     ## Split edges into SemMedDB edges and Non-SemMedDB edges
     logger.info("Split edges into SemMedDB edges and Non-SemMedDB edges")
