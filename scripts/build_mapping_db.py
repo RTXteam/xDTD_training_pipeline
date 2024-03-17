@@ -40,12 +40,12 @@ class xDTDMappingDB():
 
         if mode == 'build':
             if not os.path.exists(kgml_xdtd_data_path):
-                print(f"Error: The given path '{kgml_xdtd_data_path}' doesn't exist.", flush=True)
+                print(f"Error: The given path of kgml_xdtd_data_path '{kgml_xdtd_data_path}' doesn't exist.", flush=True)
                 raise
             else:
                 self.kgml_xdtd_data_path = kgml_xdtd_data_path
             if not os.path.exists(tsv_path):
-                print(f"Error: The given path '{tsv_path}' doesn't exist.", flush=True)
+                print(f"Error: The given path of tsv_path '{tsv_path}' doesn't exist.", flush=True)
                 raise
             else:
                 self.tsv_path = tsv_path
@@ -64,7 +64,7 @@ class xDTDMappingDB():
             self.success_con = self._connect(db_path)
         elif mode == 'run':
             if db_loc is None:
-                print(f"Error: The given path '{db_loc}' doesn't exist.", flush=True)
+                print(f"Error: The given path of db_loc '{db_loc}' doesn't exist.", flush=True)
                 raise
             else:
                 db_path = os.path.join(db_loc, database_name)
@@ -171,6 +171,8 @@ class xDTDMappingDB():
                 data_reader = csv.reader(data_tsv, delimiter='\t')
                 tsv_edge_df = pd.DataFrame([row for row in data_reader])
                 tsv_edge_df.columns = headers
+                ## filter out the 'domain_range_exclusion==True' edge
+                tsv_edge_df = tsv_edge_df.loc[tsv_edge_df['domain_range_exclusion'] != 'True',:].reset_index(drop=True)
                 tsv_edge_df = tsv_edge_df[['subject','object','predicate','primary_knowledge_source','publications','publications_info','kg2_ids']]
                 # Split 'knowledge_sources' on 'ǂ' and then explode it
                 # tsv_edge_df['knowledge_source'] = tsv_edge_df['knowledge_source'].str.split('ǂ')
