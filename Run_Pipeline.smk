@@ -82,7 +82,7 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl")),
         ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
         # ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])),
-        # ancient(os.path.join(CURRENT_PATH, "results", "step25_done.txt")),
+        # ancient(os.path.join(CURRENT_PATH, "results", "step25_done.txt"))
 
 
 
@@ -753,8 +753,8 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
 #         """
 #         python {input.script} --build \
 #                               --db_config_path {input.db_configfile} \
-#                               --tsv_path ${params.tsv_path} \
-#                               --kgml_xdtd_data_path ${params.kgml_xdtd_data_path} \
-#                               --database_name ${input.database_name} \
+#                               --tsv_path {params.tsv_path} \
+#                               --kgml_xdtd_data_path {params.kgml_xdtd_data_path} \
+#                               --database_name {input.database_name} \
 #                               --outdir {params.outdir}
 #         """
