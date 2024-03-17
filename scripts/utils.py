@@ -168,7 +168,7 @@ def load_index(input_path):
     name_to_id, id_to_name = {}, {}
     with open(input_path) as f:
         for index, line in enumerate(f.readlines()):
-            name, _ = line.strip().split()
+            name, _ = line.strip().split('\t')
             name_to_id[name] = index
             id_to_name[index] = name
     return name_to_id, id_to_name

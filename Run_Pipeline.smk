@@ -111,7 +111,7 @@ rule step2_download_trainingdata:
         training_data = config['ZENODOINFO']['TRAINING_DATA'],
         drugmechdb_path = config['DRUGMECHDBINFO']['DRUGMECHDB_PATH']
     run:
-        shell("curl {params.zenodo_link}/files/{params.training_data} -o ./data/{params.training_data}"),
+        shell("curl --cookie zenodo-cookies.txt '{params.zenodo_link}/files/{params.training_data}?download=1' --output ./data/{params.training_data}"),
         shell("tar zxvf ./data/{params.training_data} -C ./data/"),
         shell("curl {params.drugmechdb_link}/{params.drugmechdb_path} -o ./data/{params.drugmechdb_path}")
 
@@ -747,7 +747,7 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
 #         touch(os.path.join(CURRENT_PATH, "results", "step25_done.txt"))
 #     params:
 #         outdir = CURRENT_PATH,
-#         tsv_path = ancient(os.path.join(CURRENT_PATH, "kg2c-tsv")),
+#         tsv_path = ancient(os.path.join(CURRENT_PATH, "data", "kg2c-tsv")),
 #         kgml_xdtd_data_path = ancient(os.path.join(CURRENT_PATH, "data"))
 #     shell:
 #         """
