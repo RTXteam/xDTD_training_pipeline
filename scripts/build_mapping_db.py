@@ -117,8 +117,8 @@ class xDTDMappingDB():
             ## load kgml_xdtd data
             print("Loading KGML-xDTD data...", flush=True)
             kgml_xdtd_graph_nodes = pd.read_csv(os.path.join(self.kgml_xdtd_data_path, 'entity2freq.txt'), sep='\t', header=None).drop(columns=[1])
-            kgml_xdtd_graph_edges = pd.read_csv(os.path.join(self.kgml_xdtd_data_path, 'graph_edges.txt'), sep='\t', header=0)
-            kgml_xdtd_graph_edges_dict = {(row[0],row[2],row[1]):1 for row in kgml_xdtd_graph_edges.to_numpy()}
+            # kgml_xdtd_graph_edges = pd.read_csv(os.path.join(self.kgml_xdtd_data_path, 'graph_edges.txt'), sep='\t', header=0)
+            # kgml_xdtd_graph_edges_dict = {(row[0],row[2],row[1]):1 for row in kgml_xdtd_graph_edges.to_numpy()}
             # kgml_xdtd_graph_edges_dict = {}
             # for row in tqdm(kgml_xdtd_graph_edges.to_numpy()):
             #     if row[2] == 'biolink:entity_regulates_entity':
@@ -190,11 +190,11 @@ class xDTDMappingDB():
             ## Intert edge information into database
             print("Inserting into EDGE_MAPPING_TABLE...", flush=True)
             for row in tqdm(tsv_edge_df.to_numpy()):
-                if (row[0], row[2], row[1]) in kgml_xdtd_graph_edges_dict:
-                    ## intsert into database
-                    row = [f"{row[0]}--{row[2]}--{row[1]}"] + list(row)
-                    insert_command = f"INSERT INTO EDGE_MAPPING_TABLE values (?,?,?,?,?,?,?,?)"
-                    self.connection.execute(insert_command, tuple(row))
+                # if (row[0], row[2], row[1]) in kgml_xdtd_graph_edges_dict:
+                ## intsert into database
+                row = [f"{row[0]}--{row[2]}--{row[1]}"] + list(row)
+                insert_command = f"INSERT INTO EDGE_MAPPING_TABLE values (?,?,?,?,?,?,?,?)"
+                self.connection.execute(insert_command, tuple(row))
             print(f"Inserting into EDGE_MAPPING_TABLE is completed", flush=True)
             self.connection.commit()
 
