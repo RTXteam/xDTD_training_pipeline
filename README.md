@@ -28,7 +28,7 @@ SYSTEMINFO:
   NUM_CPU: 200 ## change this according to your machine configuration
 
 TRAINING_DATA:
-  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.3 ## please make sure this is the latest Molepro API. Check it from http://www.smart-api.info/ui/940677a65cae38c9a482e54e5c6794f7
+  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.4 ## please make sure this is the latest Molepro API. Check it from https://t.biothings.io/registry?q=molepro&tags=asyncquery_status
 
 MODELINFO:
   PARAMS:
