@@ -34,7 +34,7 @@ DUMMY_ENTITY_ID = 0
 EPSILON = float(np.finfo(float).eps)
 HUGE_INT = 1e31
 TINY_VALUE = 1e-41
-NGD_normalizer = 3.5e+7 * 20  # From PubMed home page there are 35 million articles (based on the information on https://pubmed.ncbi.nlm.nih.gov/ on 08/09/2023); avg 20 MeSH terms per article
+NGD_normalizer = 3.7e+7 * 20  # From PubMed home page there are 35 million articles (based on the information on https://pubmed.ncbi.nlm.nih.gov/ on 08/09/2023); avg 20 MeSH terms per article
 
 class ACDataLoader(object):
     def __init__(self, indexes, batch_size, permutation=True):
