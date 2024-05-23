@@ -34,7 +34,7 @@ def calculate_ngd(concept_pubmed_ids):
     else:
         try:
             return (max([math.log(count) for count in marginal_counts]) - math.log(joint_count)) / \
-                (math.log(NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
+                (math.log(utils.NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
         except ValueError:
             return None
 
