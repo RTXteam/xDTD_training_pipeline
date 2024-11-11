@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import argparse
 import json
+import sqlite3
 from multiprocessing import Pool
 
 ## Import Personal Packages
@@ -30,8 +31,8 @@ def map_to_graph(row):
             res = None
         preferred_disease_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Disease' or res['preferred_category']=='biolink:PhenotypicFeature' or res['preferred_category']=='biolink:DiseaseOrPhenotypicFeature' or res['preferred_category']=='biolink:ClinicalFinding' or res['preferred_category']=='biolink:BehavioralFeature') else None
         return [preferred_drug_curie, preferred_disease_curie]
-    elif len(row) == 4:
-        count, drug, disease, ngd = row
+    elif len(row) == 3:
+        count, drug, disease = row
         try:
             res = synonymizer.get_canonical_curies(drug)[drug]
         except:
@@ -42,8 +43,7 @@ def map_to_graph(row):
         except:
             res = None
         preferred_disease_curie = res['preferred_curie'] if (res is not None) and (res['preferred_category']=='biolink:Disease' or res['preferred_category']=='biolink:PhenotypicFeature' or res['preferred_category']=='biolink:DiseaseOrPhenotypicFeature' or res['preferred_category']=='biolink:ClinicalFinding' or res['preferred_category']=='biolink:BehavioralFeature') else None
-        return [count, preferred_drug_curie, preferred_disease_curie, ngd]
-
+        return [count, preferred_drug_curie, preferred_disease_curie]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -53,8 +53,8 @@ if __name__ == '__main__':
     parser.add_argument("--secret_config_path", type=str, help="path to secret config file", default="../config_secrets.json")
     parser.add_argument("--graph", type=str, help="path to graph edge file", default=os.path.join(ROOTPath, "data", "filtered_graph_edges.txt"))
     parser.add_argument("--thread", type=int, help="Number of processes to use", default=100)
-    parser.add_argument("--tp", type=str, nargs='*', help="paths to the true positive txts", default=[os.path.join(ROOTPath, "data", "training_data", x) for x in ['semmed_tp.txt','mychem_tp.txt','mychem_tp_umls.txt','NDF_TP.txt']])
-    parser.add_argument("--tn", type=str, nargs='*', help="paths to the true negative txts", default=[os.path.join(ROOTPath, "data", "training_data", x) for x in ['semmed_tn.txt','mychem_tn.txt','mychem_tn_umls.txt','NDF_TN.txt']])
+    parser.add_argument("--tp", type=str, nargs='*', help="paths to the true positive txts", default=[os.path.join(ROOTPath, "data", "raw_training_data", x) for x in ['semmed_tp.txt','mychem_tp.txt','mychem_tp_umls.txt','NDF_TP.txt']])
+    parser.add_argument("--tn", type=str, nargs='*', help="paths to the true negative txts", default=[os.path.join(ROOTPath, "data", "raw_training_data", x) for x in ['semmed_tn.txt','mychem_tn.txt','mychem_tn_umls.txt','NDF_TN.txt']])
     parser.add_argument("--tncutoff", type=int, help="A positive integer for the true negative cutoff of SemMedDB hot counts to include in analysis", default=10)
     parser.add_argument("--tpcutoff", type=int, help="A positive integer for the true positive cutoff of SemMedDB hot counts to include in analysis", default=10)
     parser.add_argument("--ngdcutoff", type=float, help="A NGD score cutoff of SemMedDB", default=0.6)
@@ -78,6 +78,16 @@ if __name__ == '__main__':
         config_dbs = json.load(file_in)
     with open(args.secret_config_path, 'rb') as file_in:
         config_secrets = json.load(file_in)
+
+    ## Get PMID Info
+    logger.info("Get PMID Info")
+    with open(args.db_config_path, 'rb') as file_in:
+        config_dbs = json.load(file_in)
+        curie_to_pmids_path = config_dbs["database_downloads"]["curie_to_pmids"]
+        curie_to_pmids_name = curie_to_pmids_path.split('/')[-1]
+    cnx = sqlite3.connect(os.path.join(ROOTPath, "data", curie_to_pmids_name))
+    temp_df = pd.read_sql_query("SELECT * FROM curie_to_pmids", cnx)
+    curie_to_pmids_dict = dict(zip(temp_df['curie'], temp_df['pmids']))
 
     ## Connect to neo4j database
     neo4j_instance = config_dbs["neo4j"]["KG2c"]
@@ -134,6 +144,12 @@ if __name__ == '__main__':
             res = [elem for elem in executor.map(map_to_graph, temp.to_numpy())]
         temp = pd.DataFrame(res, columns=df_header)
         temp = temp.dropna().drop_duplicates().reset_index().drop(columns=['index'])
+        if 'count' in list(temp):
+            params = [(curie_to_pmids_dict.get(row[1]), curie_to_pmids_dict.get(row[2])) for row in temp.to_numpy()]
+            with Pool(processes=args.thread) as executor:
+                all_ngd_scores = executor.map(utils.calculate_ngd, params)
+            temp['ngd'] = all_ngd_scores
+            temp = temp.dropna().drop_duplicates().reset_index().drop(columns=['index'])
         select_rows = list(all_nodes.intersection(set(temp['source'])))
         temp = temp.set_index('source').loc[select_rows,:].reset_index()
         select_rows = list(all_nodes.intersection(set(temp['target'])))
@@ -147,6 +163,12 @@ if __name__ == '__main__':
             res = [elem for elem in executor.map(map_to_graph, temp.to_numpy())]
         temp = pd.DataFrame(res, columns=df_header)
         temp = temp.dropna().drop_duplicates().reset_index().drop(columns=['index'])
+        if 'count' in list(temp):
+            params = [(curie_to_pmids_dict.get(row[1]), curie_to_pmids_dict.get(row[2])) for row in temp.to_numpy()]
+            with Pool(processes=args.thread) as executor:
+                all_ngd_scores = executor.map(utils.calculate_ngd, params)
+            temp['ngd'] = all_ngd_scores
+            temp = temp.dropna().drop_duplicates().reset_index().drop(columns=['index'])
         select_rows = list(all_nodes.intersection(set(temp['source'])))
         temp = temp.set_index('source').loc[select_rows,:].reset_index()
         select_rows = list(all_nodes.intersection(set(temp['target'])))

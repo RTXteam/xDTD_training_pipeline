@@ -1,19 +1,15 @@
 RTXINFO:
   CONFIG_SERVER: "araxconfig@araxconfig.rtx.ai"
-  GITHUB_LINK: " https://raw.githubusercontent.com/RTXteam/RTX/master"
+  GITHUB_LINK: " https://raw.githubusercontent.com/RTXteam/RTX/kg2.10.0c"
   SECRET_CONFIGFILE: "config_secrets.json"
   DB_CONFIGFILE: "config_dbs.json"
-
-ZENODOINFO:
-  LINK: "https://zenodo.org/records/7582233"
-  TRAINING_DATA: "training_data.tar.gz"
 
 DRUGMECHDBINFO:
   LINK: "https://raw.githubusercontent.com/SuLab/DrugMechDB/main"
   DRUGMECHDB_PATH: "indication_paths.yaml"
 
 KG2INFO:
-  BIOLINK_VERSION: "3.5.2"
+  BIOLINK_VERSION: "4.2.0"
   PUBLICATION_CUTOFF: 10
   NGD_CUTOFF: 0.6
 
@@ -22,17 +18,17 @@ SYSTEMINFO:
 
 TRAINING_DATA:
   TP:
-    MYCHEM: training_data/mychem_tp.txt
-    SEMMED: training_data/semmed_tp.txt
-    NDF: training_data/ndf_tp.txt
-    REPODB: training_data/repoDB_tp.txt
+    MYCHEM: raw_training_data/mychem_tp.txt
+    SEMMED: raw_training_data/semmed_tp.txt
+    NDF: raw_training_data/ndf_tp.txt
+    REPODB: raw_training_data/repoDB_tp.txt
   TN:
-    MYCHEM: training_data/mychem_tn.txt
-    SEMMED: training_data/semmed_tn.txt
-    NDF: training_data/ndf_tn.txt
-    REPODB: training_data/repoDB_tn.txt
+    MYCHEM: raw_training_data/mychem_tn.txt
+    SEMMED: raw_training_data/semmed_tn.txt
+    NDF: raw_training_data/ndf_tn.txt
+    REPODB: raw_training_data/repoDB_tn.txt
   DRUGBANK_XML: drugbank.xml
-  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.4
+  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.5
 
 MODELINFO:
   PARAMS:
@@ -45,7 +41,7 @@ MODELINFO:
     LEARNING_RATE: 0.0005
     
 PARALLEL_PRECOMPUTE:
-  K: 50
+  K: 25
   N_drugs: 150
   N_paths: 50
   BATCH_SIZE: 200

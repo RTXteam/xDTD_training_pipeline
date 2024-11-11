@@ -113,7 +113,7 @@ class creativeDTD:
         if self.top_N_drugs is not None:
             self.args.logger.info(f"Extracting all paths with length 3 for disease {list(set(self.top_N_drugs['disease_id']))[0]}")
             self.filtered_res_all_paths = dict()
-            filter_edges = [self.args.relation2id[edge] for edge in ['biolink:related_to','biolink:coexists_with','biolink:contraindicated_for']]
+            filter_edges = [self.args.relation2id[edge] for edge in ['biolink:related_to','biolink:coexists_with','biolink:contraindicated_for'] if self.args.relation2id.get(edge)]
             for index1 in range(len(self.top_N_drugs)):
                 source, target = self.top_N_drugs.loc[index1,['drug_id','disease_id']]
                 if not (utils.check_curie(source, self.args.entity2id)[1] and utils.check_curie(target, self.args.entity2id)[1]):

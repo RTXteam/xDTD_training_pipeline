@@ -28,7 +28,6 @@ rule targets:
     input:
         ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['SECRET_CONFIGFILE'])),
         ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE'])),
-        ancient(os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['DRUGMECHDBINFO']['DRUGMECHDB_PATH'])),
         ancient(os.path.join(CURRENT_PATH, "data", 'graph_edges.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')),
@@ -100,19 +99,14 @@ rule step1_download_RTXconfig:
         shell("scp {params.server_name}:{params.secret_configfile} ."),
         shell("wget {params.github_link}/code/{params.db_configfile}")
 
-# download training data from Zenodo (https://zenodo.org/record/7582233)
-rule step2_download_trainingdata:
+rule step2_download_data:
     output:
-        os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA']),
         os.path.join(CURRENT_PATH, "data", config['DRUGMECHDBINFO']['DRUGMECHDB_PATH'])
     params:
-        zenodo_link = config['ZENODOINFO']['LINK'],
         drugmechdb_link = config['DRUGMECHDBINFO']['LINK'],
-        training_data = config['ZENODOINFO']['TRAINING_DATA'],
         drugmechdb_path = config['DRUGMECHDBINFO']['DRUGMECHDB_PATH']
     run:
-        shell("curl --cookie zenodo-cookies.txt '{params.zenodo_link}/files/{params.training_data}?download=1' --output ./data/{params.training_data}"),
-        shell("tar zxvf ./data/{params.training_data} -C ./data/"),
+        shell("tar zxvf ./data/raw_training_data.tar.gz -C ./data/"),
         shell("curl {params.drugmechdb_link}/{params.drugmechdb_path} -o ./data/{params.drugmechdb_path}")
 
 rule step3_download_data_and_kg2:
@@ -158,8 +152,7 @@ rule step5_generate_tp_and_tn_pairs:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_tp_tn_pairs.py")),
         secret_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['SECRET_CONFIGFILE'])),
         db_configfile = ancient(os.path.join(CURRENT_PATH, config['RTXINFO']['DB_CONFIGFILE'])),
-        graph_edges = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt')),
-        training_data_unused = ancient(os.path.join(CURRENT_PATH, "data", config['ZENODOINFO']['TRAINING_DATA'])),
+        graph_edges = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt'))
     output:
         os.path.join(CURRENT_PATH, "data", 'tp_pairs.txt'),
         os.path.join(CURRENT_PATH, "data", 'tn_pairs.txt'),
@@ -757,4 +750,3 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
 #                               --kgml_xdtd_data_path {params.kgml_xdtd_data_path} \
 #                               --database_name {input.database_name} \
 #                               --outdir {params.outdir}
-#         """

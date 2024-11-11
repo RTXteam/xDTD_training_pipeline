@@ -17,27 +17,6 @@ sys.path.append(os.path.join(ROOTPath, 'scripts'))
 import utils
 from biolink_helper import BiolinkHelper
 
-
-def calculate_ngd(concept_pubmed_ids):
-
-    if concept_pubmed_ids[0] is None or concept_pubmed_ids[1] is None:
-        return None
-    concept_pubmed_ids = (eval(concept_pubmed_ids[0]),eval(concept_pubmed_ids[1]))
-
-    marginal_counts = list(map(lambda pmid_list: len(set(pmid_list)), concept_pubmed_ids))
-    joint_count = len(set(concept_pubmed_ids[0]).intersection(set(concept_pubmed_ids[1])))
-
-    if 0 in marginal_counts or 0. in marginal_counts:
-        return None
-    elif joint_count == 0 or joint_count == 0.:
-        return None
-    else:
-        try:
-            return (max([math.log(count) for count in marginal_counts]) - math.log(joint_count)) / \
-                (math.log(utils.NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
-        except ValueError:
-            return None
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
@@ -93,11 +72,12 @@ if __name__ == '__main__':
 
     ## Calculate NGD score
     logger.info("Calculate NGD score")
+    logger.info(f'Total semmeddb edges: {len(semmeddb_edges)}')
     # set up the batches
     params = [(curie_to_pmids_dict.get(edge[0]), curie_to_pmids_dict.get(edge[1])) for edge in semmeddb_edges]
     batch =list(range(0,len(params), args.batch_size))
     batch.append(len(params))
-    logger.info(f'Total batch: {len(batch)-1}')
+    logger.info(f'Split {len(semmeddb_edges)} edges into {len(batch)-1} batches')
 
     ## run each batch in parallel
     all_ngd_scores = []
@@ -107,10 +87,13 @@ if __name__ == '__main__':
             start = batch[i]
             end = batch[i+1]
             with Pool(processes=args.num_core) as executor:
-                all_ngd_scores += executor.map(calculate_ngd, params[start:end])
+                all_ngd_scores += executor.map(utils.calculate_ngd, params[start:end])
     semmeddb_edges_df = pd.DataFrame(semmeddb_edges)
     semmeddb_edges_df.columns = ['source', 'target', 'predicate', 'num_publications', 'p_knowledge_source']
     semmeddb_edges_df['ngd_score'] = all_ngd_scores
+    ## Save SemMedDB edges with NGD score
+    logger.info("Save SemMedDB edges with NGD score")
+    semmeddb_edges_df.to_csv(os.path.join(output_path, "semmeddb_edges_with_ngd_score.txt"), sep='\t', index=False)
 
     ## Filter edges based on NGD score and number of supported publications
     logger.info("Filter edges based on NGD score and number of supported publications")

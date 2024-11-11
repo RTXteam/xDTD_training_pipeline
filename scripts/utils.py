@@ -828,3 +828,23 @@ def id_to_name(curie: str):
     else:
         preferred_curie_name = None
     return str(preferred_curie_name)
+
+def calculate_ngd(concept_pubmed_ids):
+
+    if concept_pubmed_ids[0] is None or concept_pubmed_ids[1] is None:
+        return None
+    concept_pubmed_ids = (eval(concept_pubmed_ids[0]),eval(concept_pubmed_ids[1]))
+
+    marginal_counts = list(map(lambda pmid_list: len(set(pmid_list)), concept_pubmed_ids))
+    joint_count = len(set(concept_pubmed_ids[0]).intersection(set(concept_pubmed_ids[1])))
+
+    if 0 in marginal_counts or 0. in marginal_counts:
+        return None
+    elif joint_count == 0 or joint_count == 0.:
+        return None
+    else:
+        try:
+            return (max([math.log(count) for count in marginal_counts]) - math.log(joint_count)) / \
+                (math.log(NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
+        except ValueError:
+            return None

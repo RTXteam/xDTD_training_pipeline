@@ -8,6 +8,7 @@ from transformers import AutoModel, AutoTokenizer
 import torch
 import numpy as np
 from sklearn.decomposition import PCA
+from tqdm import trange
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -110,11 +111,11 @@ if __name__ == "__main__":
 
     ori_embedding = np.zeros([len(texts), 768])
 
-    print(f"Calculating BERT embedding on {args.device} with batch size: {args.batch_size}")
+    logger.info(f"Calculating BERT embedding on {args.device} with batch size: {args.batch_size}")
 
     start_time = time.time()
 
-    for i in range(len(texts) // args.batch_size):
+    for i in trange(len(texts) // args.batch_size):
         if (i * args.batch_size) % 10000 == 0:
             print(f"Finished: {i * args.batch_size} in {time.time() - start_time}")
             start_time = time.time()
@@ -127,12 +128,12 @@ if __name__ == "__main__":
         batch_embeddings = get_bert_embedding(batch_text, tokenizer, model, args.device)
         ori_embedding[(i+1)*args.batch_size:] = batch_embeddings
             
-    print("Fitting new embedding with PCA")
+    logger.info("Fitting new embedding with PCA")
 
     pca = PCA(n_components=args.pca_components)
     pca_embedding = pca.fit_transform(ori_embedding)
 
-    print("Generating and saving data")
+    logger.info("Generating and saving data")
 
     id2embedding = {}
     for n_id in id2index.keys():
