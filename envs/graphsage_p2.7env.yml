@@ -7,5 +7,7 @@ dependencies:
   - networkx=1.11
   - numpy=1.16.6
   - pip
-  - tensorboard=1.8.0
-  - tensorflow=1.8.0
+  - tensorboard
+  - tensorflow-gpu
+  - cudatoolkit
+  - cudnn
