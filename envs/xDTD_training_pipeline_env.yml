@@ -7,39 +7,34 @@ channels:
   - defaults
   - anaconda
 dependencies:
-  - python=3.10
-  - graph-tool=2.44
-  - networkx=3.3
-  - numpy=1.24
-  - pytorch=2.4
+  - python=3.12
+  - graph-tool=2.98
+  - networkx=3.6.1
+  - numpy=2.4.3
+  - pytorch=2.4.1
   - requests=2.27.1
-  - pip=23.1
-  - setuptools=58.0.4
-  - biothings_client
-  - transformers=4.45
-  - xmltodict=0.13
-  - nltk=3.9
-  - pattern=3.6
-  - httpx=0.23
+  - pip=23.1.2
+  - biothings_client=0.2.6
+  - transformers=4.45.2
+  - xmltodict=0.13.0
+  - pattern=3.6.0
+  - httpx=0.23.3
   - snakemake=7.25.4
+  - cxx-compiler
   - pybind11
   - pip:
-    - beautifulsoup4
-    - biopython
-    - gdown==4.6.0
-    - hummingbird-ml==0.4.11
-    - ipykernel
-    - ipython
-    - neo4j==4.4.1
-    - pandas
-    - biothings-client
-    - requests-cache
-    - scikit-learn==1.5.0
+    - beautifulsoup4==4.14.3
+    - hummingbird-ml==0.4.12
+    - ipykernel==7.2.0
+    - ipython==9.11.0
+    - pandas==2.3.3
+    - requests-cache==1.3.1
+    - scikit-learn==1.7.1
     - joblib==1.2.0
-    - scipy==1.10.1
-    - seaborn
-    - pyyaml==6.0
+    - scipy==1.15.3
+    - seaborn==0.13.2
+    - pyyaml==6.0.2
     - treelib==1.6.1
     - tensorboard==2.8.0
-    - tqdm
-    - graph-walker
+    - tqdm==4.67.3
+    - graph-walker==1.0.6
