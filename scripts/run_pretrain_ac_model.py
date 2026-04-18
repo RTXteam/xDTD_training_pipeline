@@ -1,15 +1,14 @@
-## This script is modified from the code used in the original ADAC RL model (Zhao et al. doi: 10.1145/3397271.3401171)
-import sys
-import os
+"""Pre-train the Actor-Critic model (modified from Zhao et al. doi: 10.1145/3397271.3401171)."""
 import argparse
+import math
+import os
 import pickle
+import sys
+
+import joblib
+import numpy as np
 import torch
 import torch.optim as optim
-import numpy as np
-import joblib
-import math
-import time
-import copy
 from tqdm import tqdm
 from knowledge_graph import KnowledgeGraph
 from kg_env import KGEnvironment
@@ -26,9 +25,9 @@ import utils
 
 def pretrain(args):
     kg = KnowledgeGraph(args, bandwidth=args.bandwidth, entity_dim=args.entity_dim, entity_type_dim=args.entity_type_dim, relation_dim=args.relation_dim, emb_dropout_rate=args.emb_dropout_rate, bucket_interval=args.bucket_interval, load_graph=True)
-    ## read pre-train model
+    ## ── Read pre-train model ───────────────────────────────────────────────────
     pretrain_model = joblib.load(args.pretrain_model_path)
-    ## convert sklearn model to pytorch
+    ## ── Convert sklearn model to pytorch ───────────────────────────────────────
     pretrain_model = convert(pretrain_model, 'pytorch')
     if args.use_gpu is True:
         pretrain_model.to(f"cuda:{args.gpu}")
@@ -38,17 +37,17 @@ def pretrain(args):
         pretrain_path = pickle.load(infile)
     all_expert_path_size = pretrain_path[1].shape[0]
     args.logger.info("Load {} expert paths from {}".format(all_expert_path_size, pretrain_path_file))
-    ## set up pretrained AC model
+    ## ── Set up pretrained AC model ─────────────────────────────────────────────
     model = PreActorCritic(args, kg, args.state_history, args.gamma, args.target_update, args.hidden)
     if args.use_pre_train:
         pretrain_ac_file = os.path.join(args.model_save_location, args.pre_train_model_name)
         args.logger.info("Load pretrained AC model from " + pretrain_ac_file)
         pretrain_dict = torch.load(pretrain_ac_file, map_location=args.device)
-        ## load policy_net
+        ## ── Load policy_net ───────────────────────────────────────────────────────
         model_dict = model.policy_net.state_dict()
         model_dict.update(pretrain_dict)
         model.policy_net.load_state_dict(model_dict, strict=False)
-        ## load target_net
+        ## ── Load target_net ───────────────────────────────────────────────────────
         model.target_net.load_state_dict(model.policy_net.state_dict())
         model.target_net.eval()
         del pretrain_dict
@@ -63,14 +62,14 @@ def pretrain(args):
     optimizer = optim.Adam(filter(lambda x: x.requires_grad, model.policy_net.parameters()), lr=args.lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=args.scheduler_factor, patience=args.scheduler_patience)
 
-    ### Pretrained AC ###
+    ## ── Pretrained AC ───────────────────────────────────────────────────────────
     model.policy_net.train()
 
     for epoch in range(1, args.epochs + 1):
 
         args.logger.info(f'running epoch{epoch}...')
         epoch_rewards, epoch_critic_loss, epoch_actor_loss = [], [], []
-        ### Start epoch ###
+        ## ── Start epoch ───────────────────────────────────────────────────────────
         if all_expert_path_size > args.max_pre_path:
             new_indexes = np.random.permutation(all_expert_path_size)[:args.max_pre_path]
             new_pretrain_path = [pretrain_path[0][new_indexes],pretrain_path[1][new_indexes]]
@@ -80,11 +79,9 @@ def pretrain(args):
         total_steps = math.ceil(dataloader.num_paths/args.batch_size)
         dataloader.reset()
         step = 1
-        # time_record = 0
         pbar = tqdm(total=dataloader.num_paths)
         while dataloader.has_next():
-            # start_time = time.time()
-            ### Start batch episodes ###
+            ## ── Start episode ───────────────────────────────────────────────────────
             episode_critic_loss = 0.0
             episode_actor_loss = 0.0
             episode_reward = 0.0
@@ -112,7 +109,7 @@ def pretrain(args):
                 episode_reward += np.mean(env._batch_curr_reward)
 
                 act_num += 1
-            ### End of episodes ##
+            ## ── End of episodes ───────────────────────────────────────────────────────
 
             env._batch_path = None
             env._batch_curr_action_spaces = None
@@ -133,7 +130,7 @@ def pretrain(args):
             step += 1
             pbar.update(len(source_ids))
 
-        # Report performance
+        ## ── Report performance ─────────────────────────────────────────────────────
         avg_reward = np.mean(epoch_rewards)
         avg_critic_loss = np.mean(epoch_critic_loss)
         avg_actor_loss = np.mean(epoch_actor_loss)
@@ -143,12 +140,11 @@ def pretrain(args):
             scheduler.step(avg_critic_loss)
 
         args.logger.info(f'epoch={epoch:d} | reward={avg_reward:.5f} | critic_loss={avg_critic_loss:.5f} | actor_loss={avg_actor_loss:.5f}')
-        ### END of epoch ###
+        ## ── End of epoch ───────────────────────────────────────────────────────────
 
-        # if epoch % args.save_every == 0 or epoch == args.epochs or epoch == args.pre_actor_epoch:
+        ## ── Save pre-trained AC model ───────────────────────────────────────────────
         if epoch == args.epochs:
-            # policy_file = os.path.join(args.model_save_location, f'pre_model_epoch{epoch}.pt')
-            policy_file = os.path.join(args.model_save_location, f'pretrained_ac_model.pt')  
+            policy_file = os.path.join(args.model_save_location, 'pretrained_ac_model.pt')
             args.logger.info("Save pre train model to " + policy_file)
             saved_sd = model.policy_net.state_dict()
             for para in model.policy_net.named_parameters():
@@ -161,7 +157,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     ## folder parameters
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="run_pretrain_ac_model.log")
+    parser.add_argument("--log_name", type=str, help="log file name", default="step19_run_pretrain_ac_model.log")
     parser.add_argument('--data_dir', type=str, help='Full path of data folder', default=os.path.join(ROOTPath, "data"))
     parser.add_argument('--path_file_name', type=str, default='train_expert_demonstration_relation_entity_max3_filtered.pkl', help='expert demonstration path file name')
     parser.add_argument('--text_emb_file_name', type=str, help='The name of text embedding file', default='embedding_biobert_namecat.pkl')
@@ -178,7 +174,7 @@ if __name__ == '__main__':
     parser.add_argument('--bucket_interval', type=int, help='adjacency list bucket size to save memory (default: 50)', default=50)
     parser.add_argument('--state_history', type=int, help='state history length', default=1)
     parser.add_argument("--emb_dropout_rate", type=float, help="Knowledge entity and relation embedding vector dropout rate (default: 0)", default=0)
-    parser.add_argument("--pretrain_model_path", type=str, help="The path of pretrain model", default=os.path.join(ROOTPath, "models", "RF_model", "RF_model.pt"))
+    parser.add_argument("--pretrain_model_path", type=str, help="The path of pretrain model", default=os.path.join(ROOTPath, "models", "xgboost_model_3class", "xgboost_model.pt"))
     parser.add_argument('--tp_reward', type=float, help='Reward if the agent hits the target entity (default: 1.0)', default=1.0)
 
     # model training parameters
@@ -202,68 +198,49 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    if args.use_gpu and torch.cuda.is_available():
-        use_gpu = True
-        device = torch.device(f'cuda:{args.gpu}')
-        torch.cuda.reset_peak_memory_stats()
-        torch.cuda.set_device(args.gpu)
-    elif args.use_gpu:
-        print('No GPU is detected in this computer. Use CPU instead.')
-        use_gpu = False
-        device = 'cpu'
-    else:
-        use_gpu = False
-        device = 'cpu'
-    args.use_gpu = use_gpu
-    args.device = device
-
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    ## ── Initialize logger ───────────────────────────────────────────────────────
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
+    ## ── Check device ─────────────────────────────────────────────────────────────
+    args.use_gpu, args.device = utils.check_device(logger, use_gpu=args.use_gpu, gpu=args.gpu)
+    ## ── Set logger ───────────────────────────────────────────────────────────
     args.logger = logger
     logger.info(args)
 
     utils.set_random_seed(args.seed)
 
+    ## ── Prepare data ─────────────────────────────────────────────────────────────
     logger.info('Prepare data')
 
-    ## create model folder
-    folder_name = 'pretrain_AC_model'
-    if not os.path.isdir(os.path.join(args.output_folder, folder_name)):
-        os.mkdir(os.path.join(args.output_folder, folder_name))
-        args.model_save_location = os.path.join(args.output_folder, folder_name)
-    else:
-        args.model_save_location = os.path.join(args.output_folder, folder_name)
+    ## ── Create output directory ─────────────────────────────────────────────────
+    args.model_save_location = os.path.join(args.output_folder, 'pretrain_AC_model')
+    os.makedirs(args.model_save_location, exist_ok=True)
 
-    ## set up initial entity embedding, relation embedding
+    ## ── Create KG initialization embedding folder ───────────────────────────────
     kg_init_embedding_folder = os.path.join(args.data_dir, 'kg_init_embeddings')
-    if not os.path.isdir(kg_init_embedding_folder):
-        os.mkdir(kg_init_embedding_folder)
-    
+    os.makedirs(kg_init_embedding_folder, exist_ok=True)
+
     if not os.path.isfile(os.path.join(kg_init_embedding_folder, 'entity_embeddings.npy')):
-        with open(os.path.join(args.data_dir, 'text_embedding', args.text_emb_file_name),'rb') as infile:
-            text_emb = pickle.load(infile)
+        with open(os.path.join(args.data_dir, 'text_embedding', args.text_emb_file_name), 'rb') as f:
+            text_emb = pickle.load(f)
         _, id2entity = utils.load_index(os.path.join(args.data_dir, 'entity2freq.txt'))
         entity_embeddings = np.array([text_emb[id2entity[key]] for key in id2entity if key != 0]).astype(float)
         np.save(os.path.join(kg_init_embedding_folder, 'entity_embeddings.npy'), entity_embeddings)
 
     if not os.path.isfile(os.path.join(kg_init_embedding_folder, 'relation_embeddings.npy')):
         _, id2relation = utils.load_index(os.path.join(args.data_dir, 'relation2freq.txt'))
-        del id2relation[0]
-        relation_embeddings = []
-        for index in range(len(id2relation)):
-            emb = [0] * len(id2relation)
-            emb[index] = 1
-            relation_embeddings += [emb]
-        relation_embeddings = np.array(relation_embeddings).astype(float)
-        np.save(os.path.join(kg_init_embedding_folder, 'relation_embeddings.npy'), relation_embeddings)
+        n_relations = len(id2relation) - 1
+        np.save(os.path.join(kg_init_embedding_folder, 'relation_embeddings.npy'), np.eye(n_relations))
 
-    ## find all disease ids
+    ## ── Load entity and type vocabularies ────────────────────────────────────
     type2id, id2type = utils.load_index(os.path.join(args.data_dir, 'type2freq.txt'))
     with open(os.path.join(args.data_dir, 'entity2typeid.pkl'), 'rb') as infile:
         entity2typeid = pickle.load(infile)
-    disease_type = ['biolink:Disease', 'biolink:PhenotypicFeature', 'biolink:BehavioralFeature', 'biolink:DiseaseOrPhenotypicFeature']
+
+    ## ── Find all disease ids ───────────────────────────────────────────────────
+    disease_type = ['biolink:Disease', 'biolink:PhenotypicFeature']
     disease_type_ids = [type2id[x] for x in disease_type]
     args.disease_ids = [index for index, typeid in enumerate(entity2typeid) if typeid in disease_type_ids]
 
-    ## start to pretrained AC model
+    ## ── Start to pretrained AC model ────────────────────────────────────────────
     logger.info('Start to pretrained AC model')
     pretrain(args)

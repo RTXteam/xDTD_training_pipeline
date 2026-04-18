@@ -1,41 +1,32 @@
+"""This script builds a SQLite database for the pre-computated results of explainable DTD model."""
 
-"""This script will build a database for the pre-computation of explainable DTD model.
-Author: Chunyu Ma
-"""
-
-import os, sys
+import os
+import sys
 import pandas as pd
-import numpy as np
 import argparse
-
 from tqdm import tqdm
 import sqlite3
-import logging
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
 ROOTindex = pathlist.index("xDTD_training_pipeline")
 ROOTPath = os.path.sep.join([*pathlist[:(ROOTindex + 1)]])
-data_path = os.path.join(ROOTPath, 'data')
-model_path = os.path.join(ROOTPath, 'models')
 sys.path.append(os.path.join(ROOTPath, 'scripts'))
 import utils
 
-DEBUG = True
 
 class BuildExplainableDTD(object):
 
-    # Constructor
-    def __init__(self, args, path_to_score_results, path_to_path_results, database_name=None, outdir=None):
+    def __init__(self, logger, path_to_score_results, path_to_path_results, database_name=None, outdir=None):
         """
         Args:
-            args (argparse): arguments from command line
+            logger: logging.Logger instance.
             path_to_score_results (str): path to a folder containing the prediction score results of all diseases
             path_to_path_results (str): path to a folder containing the path results of all diseases
             database_name (str, optional): database name (Defaults: ExplainableDTD.db).
             outdir (str, optional): path to a folder where the database is generated (Defaults: ./).
         """
-        self.logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
+        self.logger = logger
 
         if not os.path.exists(path_to_score_results) or not len(os.listdir(path_to_score_results)) > 0:
             self.logger.error(f"The given path '{path_to_score_results}' doesn't exist or is an empty folder")
@@ -47,235 +38,219 @@ class BuildExplainableDTD(object):
             raise
         else:
             self.path_to_path_results = path_to_path_results
-        if database_name is None:
-            self.database_name = "ExplainableDTD.db"
-        else:
-            self.database_name = database_name
+
+        self.database_name = database_name or "ExplainableDTD.db"
         if outdir is None:
-            self.database_name = './'
-        else:
-            if not os.path.exists(outdir):
-                os.makedirs(outdir)
-            self.outdir = outdir
-        self.success_con = self.connect()
+            outdir = './'
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+        self.outdir = outdir
+        self.success_con = self._connect()
 
     def __del__(self):
-        self.disconnect()
+        self._disconnect()
 
-    # Create and store a database connection
-    def connect(self):
-        database = f"{self.outdir}/{self.database_name}"
+    def _connect(self):
+        database = os.path.join(self.outdir, self.database_name)
+        self.conn = sqlite3.connect(database)
+        self.logger.info(f"Connected to database: {database}")
+        return True
 
-        if os.path.exists(database):
-            self.connection = sqlite3.connect(database)
-            self.logger.info("Connecting to database")
-            return True
-        else:
-            self.connection = sqlite3.connect(database)
-            print("INFO: Connecting to database", flush=True)
-            return True
-
-    # Destroy the database connection
-    def disconnect(self):
-
+    def _disconnect(self):
         if self.success_con is True:
-            self.connection.commit()
-            self.connection.close()
-            self.logger.info("Disconnecting from database")
+            self.conn.commit()
+            self.conn.close()
+            self.logger.info("Disconnected from database")
             self.success_con = False
-        else:
-            self.logger.info("No database was connected! So skip disconnecting from database.")
+
+    def create_tables(self):
+        if self.success_con is not True:
+            return
+        self.logger.info(f"Creating database {self.database_name}")
+        self.conn.execute("DROP TABLE IF EXISTS PREDICTION_SCORE_TABLE")
+        self.conn.execute("""
+            CREATE TABLE PREDICTION_SCORE_TABLE(
+                drug_id VARCHAR(255),
+                drug_name VARCHAR(255),
+                disease_id VARCHAR(255),
+                disease_name VARCHAR(255),
+                tn_score FLOAT,
+                tp_score FLOAT,
+                unknown_score FLOAT
+            )
+        """)
+        self.conn.execute("DROP TABLE IF EXISTS PATH_RESULT_TABLE")
+        self.conn.execute("""
+            CREATE TABLE PATH_RESULT_TABLE(
+                drug_id VARCHAR(255),
+                drug_name VARCHAR(255),
+                disease_id VARCHAR(255),
+                disease_name VARCHAR(255),
+                path VARCHAR(255),
+                path_score FLOAT
+            )
+        """)
+        self.logger.info("Creating tables is completed")
+
+    def populate_table(self):
+        if self.success_con is not True:
             return
 
-    # Delete and create the tables
-    def create_tables(self):
+        BATCH_SIZE = 50000
+        self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("PRAGMA synchronous = OFF")
+        self.conn.execute("PRAGMA cache_size = -2000000")
 
-        if self.success_con is True:
-            self.logger.info(f"Creating database {self.database_name}")
-            self.connection.execute(f"DROP TABLE IF EXISTS PREDICTION_SCORE_TABLE")
-            self.connection.execute(f"CREATE TABLE PREDICTION_SCORE_TABLE( drug_id VARCHAR(255), drug_name VARCHAR(255), disease_id VARCHAR(255), disease_name VARCHAR(255), tn_score FLOAT, tp_score FLOAT, unknown_score FLOAT)")
-            self.connection.execute(f"DROP TABLE IF EXISTS PATH_RESULT_TABLE")
-            self.connection.execute(f"CREATE TABLE PATH_RESULT_TABLE(  drug_id VARCHAR(255), drug_name VARCHAR(255), disease_id VARCHAR(255), disease_name VARCHAR(255), path VARCHAR(255), path_score FLOAT )")
-            self.logger.info(f"Creating tables is completed")
+        SCORE_INSERT = "INSERT INTO PREDICTION_SCORE_TABLE(drug_id, drug_name, disease_id, disease_name, tn_score, tp_score, unknown_score) VALUES (?,?,?,?,?,?,?)"
+        PATH_INSERT = "INSERT INTO PATH_RESULT_TABLE(drug_id, drug_name, disease_id, disease_name, path, path_score) VALUES (?,?,?,?,?,?)"
 
-    ## Populate the tables
-    def populate_table(self):
+        score_result_list = os.listdir(self.path_to_score_results)
+        self.logger.info(f"Inserting {len(score_result_list)} score result files into PREDICTION_SCORE_TABLE...")
+        batch = []
+        for file_name in tqdm(score_result_list, desc="score_results"):
+            filepath = os.path.join(self.path_to_score_results, file_name)
+            with open(filepath, 'r') as f:
+                next(f)
+                for line in f:
+                    batch.append(tuple(line.strip().split("\t")))
+                    if len(batch) >= BATCH_SIZE:
+                        self.conn.executemany(SCORE_INSERT, batch)
+                        self.conn.commit()
+                        batch = []
+        if batch:
+            self.conn.executemany(SCORE_INSERT, batch)
+            self.conn.commit()
+        self.logger.info("Inserting score results is completed")
 
-        if self.success_con is True:
-            # save score results to local database
-            score_reulst_list = os.listdir(self.path_to_score_results)
-            for file_name in tqdm(score_reulst_list):
+        path_result_list = os.listdir(self.path_to_path_results)
+        self.logger.info(f"Inserting {len(path_result_list)} path result files into PATH_RESULT_TABLE...")
+        batch = []
+        for file_name in tqdm(path_result_list, desc="path_results"):
+            filepath = os.path.join(self.path_to_path_results, file_name)
+            with open(filepath, 'r') as f:
+                next(f)
+                for line in f:
+                    batch.append(tuple(line.strip().split("\t")))
+                    if len(batch) >= BATCH_SIZE:
+                        self.conn.executemany(PATH_INSERT, batch)
+                        self.conn.commit()
+                        batch = []
+        if batch:
+            self.conn.executemany(PATH_INSERT, batch)
+            self.conn.commit()
+        self.logger.info("Inserting path results is completed")
 
-                with open(f"{self.path_to_score_results}/{file_name}", 'r') as file_in:
-                    content_list = file_in.readlines()
-                    col_name = content_list.pop(0)
-                    insert_command1 = f"INSERT INTO PREDICTION_SCORE_TABLE("
-                    insert_command2 = f" values ("
-                    for col in col_name.strip().split("\t"):
-                        insert_command1 = insert_command1 + f"{col},"
-                        insert_command2 = insert_command2 + f"?,"
-
-                    insert_command = insert_command1 + ")" + insert_command2 + ")"
-                    insert_command = insert_command.replace(',)', ')')
-
-                    if DEBUG:
-                        print(insert_command, flush=True)
-                        print(tuple(content_list[0].strip().split("\t")), flush=True)
-
-                    for line in content_list:
-                        line = tuple(line.strip().split("\t"))
-                        self.connection.execute(insert_command, line)
-
-                    self.connection.commit()
-            self.connection.commit()
-
-            # save path results to local database
-            path_reulst_list = os.listdir(self.path_to_path_results)
-            for file_name in tqdm(path_reulst_list):
-
-                with open(f"{self.path_to_path_results}/{file_name}", 'r') as file_in:
-                    content_list = file_in.readlines()
-                    col_name = content_list.pop(0)
-                    insert_command1 = f"INSERT INTO PATH_RESULT_TABLE("
-                    insert_command2 = f" values ("
-                    for col in col_name.strip().split("\t"):
-                        insert_command1 = insert_command1 + f"{col},"
-                        insert_command2 = insert_command2 + f"?,"
-
-                    insert_command = insert_command1 + ")" + insert_command2 + ")"
-                    insert_command = insert_command.replace(',)', ')')
-
-                    if DEBUG:
-                        print(insert_command, flush=True)
-                        print(tuple(content_list[0].strip().split("\t")), flush=True)
-
-                    for line in content_list:
-                        line = tuple(line.strip().split("\t"))
-                        self.connection.execute(insert_command, line)
-
-                    self.connection.commit()
-            self.connection.commit()
-
-            self.logger.info(f"Populating tables is completed")
+        self.conn.execute("PRAGMA synchronous = NORMAL")
+        self.logger.info("Populating tables is completed")
 
     def create_indexes(self):
+        if self.success_con is not True:
+            return
+        self.logger.info("Creating indexes on PREDICTION_SCORE_TABLE")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PREDICTION_SCORE_TABLE_drug_id ON PREDICTION_SCORE_TABLE(drug_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PREDICTION_SCORE_TABLE_drug_name ON PREDICTION_SCORE_TABLE(drug_name)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PREDICTION_SCORE_TABLE_disease_id ON PREDICTION_SCORE_TABLE(disease_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PREDICTION_SCORE_TABLE_disease_name ON PREDICTION_SCORE_TABLE(disease_name)")
 
-        if self.success_con is True:
-            self.logger.info(f"Creating INDEXes on PREDICTION_SCORE_TABLE",)
-            self.connection.execute(f"CREATE INDEX idx_PREDICTION_SCORE_TABLE_drug_id ON PREDICTION_SCORE_TABLE(drug_id)")
-            self.connection.execute(f"CREATE INDEX idx_PREDICTION_SCORE_TABLE_drug_name ON PREDICTION_SCORE_TABLE(drug_name)")
-            self.connection.execute(f"CREATE INDEX idx_PREDICTION_SCORE_TABLE_disease_id ON PREDICTION_SCORE_TABLE(disease_id)")
-            self.connection.execute(f"CREATE INDEX idx_PREDICTION_SCORE_TABLE_disease_name ON PREDICTION_SCORE_TABLE(disease_name)")
-
-            self.logger.info(f"Creating INDEXes on PREDICTION_SCORE_TABLE",)
-            self.connection.execute(f"CREATE INDEX idx_PATH_RESULT_TABLE_drug_id ON PATH_RESULT_TABLE(drug_id)")
-            self.connection.execute(f"CREATE INDEX idx_PATH_RESULT_TABLE_drug_name ON PATH_RESULT_TABLE(drug_name)")
-            self.connection.execute(f"CREATE INDEX idx_PATH_RESULT_TABLE_disease_id ON PATH_RESULT_TABLE(disease_id)")
-            self.connection.execute(f"CREATE INDEX idx_PATH_RESULT_TABLE_disease_name ON PATH_RESULT_TABLE(disease_name)")
-
-            self.logger.info(f"INFO: Creating INDEXes is completed")
+        self.logger.info("Creating indexes on PATH_RESULT_TABLE")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PATH_RESULT_TABLE_drug_id ON PATH_RESULT_TABLE(drug_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PATH_RESULT_TABLE_drug_name ON PATH_RESULT_TABLE(drug_name)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PATH_RESULT_TABLE_disease_id ON PATH_RESULT_TABLE(disease_id)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_PATH_RESULT_TABLE_disease_name ON PATH_RESULT_TABLE(disease_name)")
+        self.conn.commit()
+        self.logger.info("Creating indexes is completed")
 
     def get_top_drugs_for_disease(self, disease_ids):
-        """get top drugs predicted by DTD model for given disease ids
+        """Get top drugs predicted by DTD model for given disease ids.
 
         Args:
-            disease_ids (str|list): a string of disease curie id or a list of disease curies, e.g. "MONDO:0008753" or ["MONDO:0008753","MONDO:0005148","MONDO:0005155"]
+            disease_ids (str|list): disease curie id(s), e.g. "MONDO:0008753" or ["MONDO:0008753","MONDO:0005148"]
 
         Returns:
-            top_drugs (pd.DataFrame): the top drugs predicted by DTD model for given disease ids
+            pd.DataFrame with columns: drug_id, drug_name, disease_id, disease_name, tn_score, tp_score, unknown_score
         """
+        cursor = self.conn.cursor()
+        columns = ["drug_id", "drug_name", "disease_id", "disease_name", "tn_score", "tp_score", "unknown_score"]
+        query = "SELECT drug_id, drug_name, disease_id, disease_name, tn_score, tp_score, unknown_score FROM PREDICTION_SCORE_TABLE WHERE disease_id"
 
-        cursor = self.connection.cursor()
-        columns = ["drug_id","drug_name","disease_id","disease_name","tn_score","tp_score","unknown_score"]
         if isinstance(disease_ids, str):
-            cursor.execute(f"select drug_id,drug_name,disease_id,disease_name,tn_score,tp_score,unknown_score from PREDICTION_SCORE_TABLE where disease_id='{disease_ids}';")
-            res = cursor.fetchall()
-            top_drugs= pd.DataFrame(res, columns=columns)
-            return top_drugs
+            cursor.execute(f"{query} = ?", (disease_ids,))
         elif isinstance(disease_ids, list):
-            cursor.execute(f"select drug_id,drug_name,disease_id,disease_name,tn_score,tp_score,unknown_score from PREDICTION_SCORE_TABLE where disease_id in {tuple(set(disease_ids))};")
-            res = cursor.fetchall()
-            top_drugs = pd.DataFrame(res, columns=columns)
-            return top_drugs
+            placeholders = ','.join('?' * len(disease_ids))
+            cursor.execute(f"{query} IN ({placeholders})", list(set(disease_ids)))
         else:
-            print("The 'dataset_id' in get_top_drugs_for_disease should be a string or a list", flush=True)
-            top_drugs = pd.DataFrame([], columns=columns)
-            return top_drugs
+            self.logger.error("disease_ids must be a string or a list")
+            return pd.DataFrame([], columns=columns)
+
+        return pd.DataFrame(cursor.fetchall(), columns=columns)
 
     def get_top_paths_for_disease(self, disease_ids):
-        """get top paths predicted by DTD model for given disease ids
+        """Get top paths predicted by DTD model for given disease ids.
 
         Args:
-            disease_ids (str|list): a string of disease curie id or a list of disease curies, e.g. "MONDO:0008753" or ["MONDO:0008753","MONDO:0005148","MONDO:0005155"]
+            disease_ids (str|list): disease curie id(s), e.g. "MONDO:0008753" or ["MONDO:0008753","MONDO:0005148"]
 
         Returns:
-            top_paths (dict): the top paths predicted by DTD model for given disease ids
+            dict mapping (drug_id, disease_id) -> list of [path, path_score]
         """
+        cursor = self.conn.cursor()
+        query = "SELECT drug_id, disease_id, path, path_score FROM PATH_RESULT_TABLE WHERE disease_id"
 
-        cursor = self.connection.cursor()
-        columns = ["drug_id","drug_name","disease_id","disease_name","path","path_score"]
-        top_paths = dict()
         if isinstance(disease_ids, str):
-            cursor.execute(f"select drug_id,drug_name,disease_id,disease_name,path,path_score from PATH_RESULT_TABLE where disease_id='{disease_ids}';")
-            res = cursor.fetchall()
-            temp_df = pd.DataFrame(res, columns=columns)
-            for drug_id, disease_id in temp_df[['drug_id','disease_id']].drop_duplicates().values:
-                temp = np.array(temp_df.loc[(temp_df['drug_id']==drug_id) & (temp_df['disease_id']==disease_id),['path','path_score']].values).tolist()
-                if len(temp) > 0:
-                    top_paths[(drug_id, disease_id)] = temp
-            return top_paths
+            cursor.execute(f"{query} = ?", (disease_ids,))
         elif isinstance(disease_ids, list):
-            cursor.execute(f"select drug_id,drug_name,disease_id,disease_name,path,path_score from PATH_RESULT_TABLE where disease_id in {tuple(set(disease_ids))};")
-            res = cursor.fetchall()
-            temp_df = pd.DataFrame(res, columns=columns)
-            for drug_id, disease_id in temp_df[['drug_id','disease_id']].drop_duplicates().values:
-                temp = np.array(temp_df.loc[(temp_df['drug_id']==drug_id) & (temp_df['disease_id']==disease_id),['path','path_score']].values).tolist()
-                if len(temp) > 0:
-                    top_paths[(drug_id, disease_id)] = temp
-            return top_paths
+            placeholders = ','.join('?' * len(disease_ids))
+            cursor.execute(f"{query} IN ({placeholders})", list(set(disease_ids)))
         else:
-            print("The 'dataset_id' in get_top_drugs_for_disease should be a string or a list", flush=True)
-            return top_paths
+            self.logger.error("disease_ids must be a string or a list")
+            return {}
 
-####################################################################################################
+        top_paths = {}
+        for drug_id, disease_id, path, path_score in cursor.fetchall():
+            key = (drug_id, disease_id)
+            top_paths.setdefault(key, []).append([path, path_score])
+        return top_paths
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Tests or builds the ExplainableDTD Database", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description="Build or query the ExplainableDTD database",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="build_sql_database.log")
-    parser.add_argument('--build', action="store_true", required=False, help="If set, (re)build the index from scratch", default=False)
-    parser.add_argument('--test', action="store_true", required=False, help="If set, run a test of database by doing several lookups", default=False)
-    parser.add_argument('--path_to_score_results', type=str, required=True, help="Path to a folder containing the prediction score results of all diseases")
-    parser.add_argument('--path_to_path_results', type=str, required=True, help="Path to a folder containing the path results of all diseases")
-    parser.add_argument('--database_name', type=str, required=False, help="Database name", default="ExplainableDTD.db")
-    parser.add_argument('--outdir', type=str, required=False, help="Path to a folder where the database is generated", default="./")
+    parser.add_argument("--log_name", type=str, help="Log file name", default="build_sql_database.log")
+    parser.add_argument('--build', action="store_true", help="If set, (re)build the index from scratch", default=False)
+    parser.add_argument('--test', action="store_true", help="If set, run a test of database by doing several lookups", default=False)
+    parser.add_argument('--path_to_score_results', type=str, help="Path to a folder containing the prediction score results of all diseases")
+    parser.add_argument('--path_to_path_results', type=str, help="Path to a folder containing the path results of all diseases")
+    parser.add_argument('--database_name', type=str, default="ExplainableDTD.db", help="Database name")
+    parser.add_argument('--outdir', type=str, default="./", help="Path to a folder where the database is generated")
     args = parser.parse_args()
+
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
 
     if not args.build and not args.test:
         parser.print_help()
         sys.exit(2)
 
-    EDTDdb = BuildExplainableDTD(args, args.path_to_score_results, args.path_to_path_results, database_name=args.database_name, outdir=args.outdir)
+    EDTDdb = BuildExplainableDTD(logger, args.path_to_score_results, args.path_to_path_results, database_name=args.database_name, outdir=args.outdir)
 
-    # To (re)build
     if args.build:
+        logger.info("==== Creating tables ====")
         EDTDdb.create_tables()
+        logger.info("==== Populating tables ====")
         EDTDdb.populate_table()
+        logger.info("==== Creating indexes ====")
         EDTDdb.create_indexes()
 
-    # Exit here if tests are not requested
     if not args.test:
         return
 
-    print("==== Testing for search for top drugs by disease id ====", flush=True)
-    print(EDTDdb.get_top_drugs_for_disease('MONDO:0005148'))
-    # print(EDTDdb.get_top_drugs_for_disease(["MONDO:0008753","MONDO:0005148","MONDO:0005155"]))
+    logger.info("==== Testing: top drugs by disease id ====")
+    logger.info(EDTDdb.get_top_drugs_for_disease('MONDO:0000313'))
+    logger.info("==== Testing: top paths by disease id ====")
+    logger.info(EDTDdb.get_top_paths_for_disease('MONDO:0000313'))
 
-    print("==== Testing for search for top paths by disease id ====", flush=True)
-    print(EDTDdb.get_top_paths_for_disease('MONDO:0005148'))
-    # print(EDTDdb.get_top_paths_for_disease(["MONDO:0008753","MONDO:0005148","MONDO:0005155"]))
-
-####################################################################################################
 
 if __name__ == "__main__":
     main()

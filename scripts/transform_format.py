@@ -1,11 +1,12 @@
-## Import Standard Packages
-import numpy as np
-import pandas as pd
+"""Transform GraphSAGE output into a CURIE-keyed embedding dictionary (pkl)."""
+
 import argparse
 import os
-import sys
 import pickle
-import utils
+import sys
+
+import numpy as np
+import polars as pl
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -18,29 +19,27 @@ import utils
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="transform_format.log")
+    parser.add_argument("--log_name", type=str, help="log file name", default="step16_transform_format.log")
     parser.add_argument("--data_dir", type=str, help="The path of data folder", default=os.path.join(ROOTPath, "data"))
     parser.add_argument("--input", type=str, help="The full path of graphsage output folder")
     args = parser.parse_args()
 
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
     logger.info(args)
 
-    unsupervised_graphsage_vectors = np.load(os.path.join(args.input, 'val.npy'))
-    unsupervised_graphsage_ids = pd.read_csv(open(os.path.join(args.input, 'val.txt'),'r'), header=None).rename(columns={0:'id'})
-    id_vec = pd.concat([unsupervised_graphsage_ids,pd.DataFrame(unsupervised_graphsage_vectors)],axis=1)
-    id_vec = id_vec.sort_values(by='id').reset_index(drop=True)
-    id_vec_array = id_vec.iloc[:,1:].to_numpy()
-    curie_to_ids = pd.read_csv(os.path.join(args.data_dir,'graphsage_input','id_map.txt'), sep='\t', header=0)
-    unsupervised_graphsage_emb_dict = {curie:id_vec_array[index] for index, curie in enumerate(curie_to_ids['curie'])}
+    vectors = np.load(os.path.join(args.input, 'val.npy'))
+    ids = pl.read_csv(os.path.join(args.input, 'val.txt'), has_header=False, new_columns=['id'])
+    sort_order = ids['id'].arg_sort()
+    sorted_vectors = vectors[sort_order.to_numpy()]
 
-    ## create output folder
-    if not os.path.isdir(os.path.join(args.data_dir, 'graphsage_output')):
-        os.mkdir(os.path.join(args.data_dir, 'graphsage_output'))
+    curie_map = pl.read_csv(os.path.join(args.data_dir, 'graphsage_input', 'id_map.txt'), separator='\t')
+    emb_dict = {curie: sorted_vectors[i] for i, curie in enumerate(curie_map['curie'].to_list())}
 
-    with open(os.path.join(args.data_dir,'graphsage_output','unsuprvised_graphsage_entity_embeddings.pkl'), 'wb') as outfile:
-        pickle.dump(unsupervised_graphsage_emb_dict,outfile)
+    out_dir = os.path.join(args.data_dir, 'graphsage_output')
+    os.makedirs(out_dir, exist_ok=True)
 
+    out_path = os.path.join(out_dir, 'unsuprvised_graphsage_entity_embeddings.pkl')
+    with open(out_path, 'wb') as f:
+        pickle.dump(emb_dict, f)
 
-
-
+    logger.info(f'Saved {len(emb_dict)} embeddings to {out_path}')

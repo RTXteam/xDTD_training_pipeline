@@ -14,7 +14,6 @@ dependencies:
   - pytorch=2.4.1
   - requests=2.27.1
   - pip=23.1.2
-  - biothings_client=0.2.6
   - transformers=4.45.2
   - xmltodict=0.13.0
   - pattern=3.6.0
@@ -27,14 +26,19 @@ dependencies:
     - hummingbird-ml==0.4.12
     - ipykernel==7.2.0
     - ipython==9.11.0
-    - pandas==2.3.3
     - requests-cache==1.3.1
     - scikit-learn==1.7.1
     - joblib==1.2.0
     - scipy==1.15.3
     - seaborn==0.13.2
     - pyyaml==6.0.2
-    - treelib==1.6.1
+    - polars==1.27.0
     - tensorboard==2.8.0
     - tqdm==4.67.3
+    - xgboost==2.1.4
     - graph-walker==1.0.6
+    - biolink-helper-pkg==1.0.1
+    - optuna==4.3.0
+    - openpyxl==3.1.5
+    - datasets==4.8.4
+    - xgboost==3.2.0

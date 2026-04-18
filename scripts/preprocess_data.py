@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 import collections
-import pandas as pd
+import polars as pl
 import pickle
 from tqdm import tqdm
 import networkx as nx
@@ -19,25 +19,28 @@ import utils
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="preprocess_data.log")
+    parser.add_argument("--log_name", type=str, help="log file name", default="step6_preprocess_data.log")
     parser.add_argument("--graph_nodes", type=str, help="Filtered graph node file", default=os.path.join(ROOTPath, "data", "filtered_graph_nodes_info.txt"))
     parser.add_argument("--graph_edges", type=str, help="Filtered graph edge file", default=os.path.join(ROOTPath, "data", "filtered_graph_edges.txt"))
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
     logger.info(args)
 
-    # Create entity and predicate indices
     entity_hist = collections.defaultdict(int)
     predicate_hist = collections.defaultdict(int)
     type_hist = collections.defaultdict(int)
 
-    all_graph_nodes_info = pd.read_csv(args.graph_nodes, sep='\t', header=0)
-    entity_to_type = {all_graph_nodes_info.loc[index, 'id']:all_graph_nodes_info.loc[index, 'category'] for index in range(len(all_graph_nodes_info))}
+    ## Read graph nodes info
+    all_graph_nodes_info = pl.read_csv(args.graph_nodes, separator='\t')
+    entity_to_type = dict(zip(
+        all_graph_nodes_info['id'].to_list(),
+        all_graph_nodes_info['primary_category'].to_list()
+    ))
 
     with open(args.graph_edges, 'r') as f:
-        graph_edge_triples = [l.strip() for index, l in enumerate(f.readlines()) if index!=0]
+        graph_edge_triples = [l.strip() for index, l in enumerate(f.readlines()) if index != 0]
     graph_edge_triples = set(graph_edge_triples)
 
     # Index entities and predicates

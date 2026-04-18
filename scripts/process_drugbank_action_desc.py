@@ -1,10 +1,11 @@
 ## Import Standard Packages
 import xmltodict
-import pandas as pd
+import polars as pl
 import os, sys
 import pickle
 import argparse
 import json
+from tqdm import tqdm
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -16,43 +17,43 @@ import utils
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="process_drugbank_action_desc.log")
-    parser.add_argument("--db_config_path", type=str, help="path to database config file", default="../config_dbs.json")
-    parser.add_argument("--secret_config_path", type=str, help="path to secret config file", default="../config_secrets.json")
+    parser.add_argument("--log_name", type=str, help="log file name", default="step7_process_drugbank_action_desc.log")
+    parser.add_argument("--nodes_jsonl", type=str, help="path to translator KG nodes JSONL", default=os.path.join(ROOTPath, "data", "translator_kg", "nodes.jsonl"))
     parser.add_argument('--drugbankxml', type=str, help='Path to the drugbank xml file downloaded from https://go.drugbank.com/releases/latest')
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
     logger.info(args)
 
-    ## Load the contents of two config files (e.g., config_dbs.json and config_secrets.json)
-    with open(args.db_config_path, 'rb') as file_in:
-        config_dbs = json.load(file_in)
-    with open(args.secret_config_path, 'rb') as file_in:
-        config_secrets = json.load(file_in)
+    ## Extract all possible drug entities from JSONL
+    DRUG_CATEGORIES = {'biolink:SmallMolecule', 'biolink:Drug', 'biolink:ChemicalEntity'}
+    logger.info(f"Loading drug entities from {args.nodes_jsonl}")
+    drug_records = []
+    with open(args.nodes_jsonl) as f:
+        for line in tqdm(f, desc="Reading nodes for drug entities"):
+            node = json.loads(line)
+            cats = set(node.get('category', []))
+            if cats & DRUG_CATEGORIES:
+                node_id = node['id']
+                eq_ids = node.get('equivalent_identifiers', [])
+                primary_cat = 'biolink:SmallMolecule' if 'biolink:SmallMolecule' in cats else ('biolink:Drug' if 'biolink:Drug' in cats else 'biolink:ChemicalEntity')
+                drug_records.append((node_id, primary_cat, eq_ids))
 
-    ## Connect to neo4j database
-    neo4j_instance = config_dbs["neo4j"]["KG2c"]
-    neo4j_bolt = f"bolt://{neo4j_instance}:7687"
-    neo4j_username = config_secrets["neo4j"]["KG2c"]["username"]
-    neo4j_password = config_secrets["neo4j"]["KG2c"]["password"]
-    conn = utils.Neo4jConnection(uri=neo4j_bolt, user=neo4j_username, pwd=neo4j_password)
+    logger.info(f"Total drug entities: {len(drug_records)}")
 
-    ## extract all possible drug entities from neo4j database
-    res = conn.query(f"match (n) where n.category='biolink:SmallMolecule' or n.category='biolink:Drug' or n.category='biolink:ChemicalEntity' return distinct n.id, n.category, n.equivalent_curies")
+    ## Select possible drug entities which have drugbank ids in their synonyms
+    drugbank_drug_curies_records = []
+    for node_id, category, eq_ids in drug_records:
+        drugbank_ids = [synonym for synonym in eq_ids if synonym.split(':')[0] == 'DRUGBANK']
+        if len(drugbank_ids) > 0:
+            drugbank_drug_curies_records.append((node_id, category, drugbank_ids))
 
-    ## select possible drug entities which have drugbank ids in their synonyms
-    res = res.apply(lambda row: [row[0], row[1], row[2], len([synonym for synonym in row[2] if synonym.split(':')[0]=='DRUGBANK'])>0], axis=1, result_type='expand')
-    res = res.loc[res[3].isin([True]),[0,1,2]].reset_index(drop=True)
-    drug_curies = res.apply(lambda row: [row[0], row[1], [synonym for synonym in row[2] if synonym.split(':')[0]=='DRUGBANK']], axis=1, result_type='expand')
-    
-    ## parse drugbank database xml file and read its content
-    ## download 'drugbank.xml' release(2021-01-3) from DrugBank website 'https://go.drugbank.com/releases/latest' and put it in data/ folder
+    ## Parse drugbank database xml file and read its content
     with open(args.drugbankxml) as infile:
         doc = xmltodict.parse(infile.read())
-        
-    ## collect information(e.g. drug descriptions, indications, drug action mechanism, targets) for each drugbank id which has these informaton and store them in a dictionary
+
+    ## Collect information (e.g. drug descriptions, indications, drug action mechanism, targets) for each drugbank id which has these informaton and store them in a dictionary
     drugbank_dict = dict()
     for index in range(len(doc['drugbank']['drug'])):
         if type(doc['drugbank']['drug'][index]['drugbank-id']) is list:
@@ -99,53 +100,50 @@ if __name__ == '__main__':
                         except:
                             temp += [target['polypeptide']]
                     drugbank_dict[drugbankid]['targets'].append(temp)
-    
-    ## filter out possible drug entities which don't have drug action mechanism description
-    res = drug_curies.apply(lambda row: [row[0], row[1], row[2], len([synonym for synonym in row[2] if synonym.split(':')[1] in drugbank_dict]) > 0], axis=1, result_type='expand')
-    res = res.loc[res[3],:].reset_index(drop=True)
-    
-    ## store mapping drug entity identifier in drugbank dict
-    for index in range(len(res)):
-        curie_id = res.loc[index,0]
-        drugbank_ids = res.loc[index,2]
+
+    ## Filter out drug entities that don't have drug action mechanism description
+    filtered_drugbank_drug_curies = []
+    for node_id, category, drugbank_ids in drugbank_drug_curies_records:
+        has_moa = any(drugbank_id.split(':')[1] in drugbank_dict for drugbank_id in drugbank_ids)
+        if has_moa:
+            filtered_drugbank_drug_curies.append((node_id, category, drugbank_ids))
+
+    ## Store mapping drug entity identifier in drugbank dict
+    for node_id, category, drugbank_ids in filtered_drugbank_drug_curies:
         for drugbank_id in drugbank_ids:
             if drugbank_id.split(':')[1] in drugbank_dict:
-                drugbank_dict[drugbank_id.split(':')[1]]['source_curie'] = curie_id
+                drugbank_dict[drugbank_id.split(':')[1]]['source_curie'] = node_id
 
     args.outdir = os.path.join(args.output_folder, 'expert_path_files')
     if not os.path.isdir(args.outdir):
         os.makedirs(args.outdir)
 
-    ## save drugbank dict
-    with open(os.path.join(args.outdir,'drugbank_dict.pkl'),'wb') as outfile:
+    ## Save drugbank dict
+    with open(os.path.join(args.outdir, 'drugbank_dict.pkl'), 'wb') as outfile:
         pickle.dump(drugbank_dict, outfile)
-    
-    ## convert drugbank dict to a drugbank mapping text file
-    drugbank_ids = list(drugbank_dict.keys())
+
+    ## Convert drugbank dict to a drugbank mapping text file
     df = []
     for drugbankid in drugbank_dict:
         if drugbank_dict[drugbankid].get('source_curie'):
-            df += [(drugbank_dict[drugbankid]['source_curie'],drugbankid,drugbank_dict[drugbankid]['name'],drugbank_dict[drugbankid]['description'],drugbank_dict[drugbankid]['pharmacodynamics'],drugbank_dict[drugbankid]['mechanism-of-action'],drugbank_dict[drugbankid]['indication'])]
-    drugbank_mapping = pd.DataFrame(df).rename(columns={0:'source curie',1:'corresponding drugbank id',2:'name',3:'description',4:'pharmacodynamics',5:'mechanism-of-action',6:'indication'})
-    
-    ## save drugbank mapping file
-    drugbank_mapping.to_csv(os.path.join(args.outdir,'drugbank_mapping.txt'), sep='\t', index=None)
-    
-    ## for each mapping entity, we pair it with all targets (eg. protein) described in drugbank database
+            df += [(drugbank_dict[drugbankid]['source_curie'], drugbankid, drugbank_dict[drugbankid]['name'], drugbank_dict[drugbankid]['description'], drugbank_dict[drugbankid]['pharmacodynamics'], drugbank_dict[drugbankid]['mechanism-of-action'], drugbank_dict[drugbankid]['indication'])]
+    drugbank_mapping = pl.DataFrame(df, schema=['source curie', 'corresponding drugbank id', 'name', 'description', 'pharmacodynamics', 'mechanism-of-action', 'indication'], orient='row')
+
+    ## Save drugbank mapping file
+    drugbank_mapping.write_csv(os.path.join(args.outdir, 'drugbank_mapping.txt'), separator='\t')
+
+    ## For each mapping entity, pair it with all targets described in drugbank database
     df = []
-    for index in range(len(drugbank_mapping)):
-        drugbank_id = drugbank_mapping.loc[index,'corresponding drugbank id']
+    for row in drugbank_mapping.iter_rows(named=True):
+        drugbank_id = row['corresponding drugbank id']
         if drugbank_dict[drugbank_id].get('targets'):
             for target in drugbank_dict[drugbank_id]['targets']:
-                # if target[2] == 'yes':
-                # use all potential targets
                 try:
-                    df += [(drugbank_id, drugbank_dict[drugbank_id]['source_curie'],'UniProtKB:'+target[3][2])]
+                    df += [(drugbank_id, drugbank_dict[drugbank_id]['source_curie'], 'UniProtKB:' + target[3][2])]
                 except:
-                    df += [(drugbank_id, drugbank_dict[drugbank_id]['source_curie'],None)]
+                    df += [(drugbank_id, drugbank_dict[drugbank_id]['source_curie'], None)]
         else:
-            df += [(drugbank_id, drugbank_dict[drugbank_id]['source_curie'],None)]
-            
-            
-    ## save these drug-protein pairs in a file
-    pd.DataFrame(df).to_csv(os.path.join(args.outdir,'p_expert_paths.txt'), sep='\t', index=None, header=None)
+            df += [(drugbank_id, drugbank_dict[drugbank_id]['source_curie'], None)]
+
+    ## Save these drug-protein pairs in a file
+    pl.DataFrame(df, orient='row').write_csv(os.path.join(args.outdir, 'p_expert_paths.txt'), separator='\t', include_header=False)

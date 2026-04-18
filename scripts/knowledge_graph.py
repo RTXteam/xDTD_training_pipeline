@@ -3,9 +3,9 @@ import collections
 import os
 import pickle
 
+import numpy as np
 import torch
 import torch.nn as nn
-import pandas as pd
 import utils
 
 class KnowledgeGraph(nn.Module):
@@ -147,11 +147,14 @@ class KnowledgeGraph(nn.Module):
                 num_triples += len(self.adj_list[source][relation])
                 self.out_degrees[source] += len(self.adj_list[source][relation])
         self.logger.info(f"{num_triples} facts in knowledge graph")
-        stats = dict(pd.Series(list(self.out_degrees.values())).describe())
-        msg = ''
-        for key in stats:
-            if key != 'count':
-                msg += f' {key} {stats[key]}'
+        deg_vals = np.array(list(self.out_degrees.values()))
+        stats = {
+            'mean': deg_vals.mean(), 'std': deg_vals.std(),
+            'min': deg_vals.min(), '25%': np.percentile(deg_vals, 25),
+            '50%': np.percentile(deg_vals, 50), '75%': np.percentile(deg_vals, 75),
+            'max': deg_vals.max(),
+        }
+        msg = ' '.join(f'{k} {v:.4f}' for k, v in stats.items())
         self.logger.info(f"stats of out degree: {msg}")
 
         # load page rank scores
