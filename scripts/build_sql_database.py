@@ -211,46 +211,59 @@ class BuildExplainableDTD(object):
             top_paths.setdefault(key, []).append([path, path_score])
         return top_paths
 
-
+    
 def main():
     parser = argparse.ArgumentParser(
-        description="Build or query the ExplainableDTD database",
+        description="Build or test the ExplainableDTD database",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="Log file name", default="build_sql_database.log")
-    parser.add_argument('--build', action="store_true", help="If set, (re)build the index from scratch", default=False)
-    parser.add_argument('--test', action="store_true", help="If set, run a test of database by doing several lookups", default=False)
-    parser.add_argument('--path_to_score_results', type=str, help="Path to a folder containing the prediction score results of all diseases")
-    parser.add_argument('--path_to_path_results', type=str, help="Path to a folder containing the path results of all diseases")
-    parser.add_argument('--database_name', type=str, default="ExplainableDTD.db", help="Database name")
-    parser.add_argument('--outdir', type=str, default="./", help="Path to a folder where the database is generated")
+    parser.add_argument('--build', action="store_true", default=False,
+                        help="(Re)build the database from scratch")
+    parser.add_argument('--test', action="store_true", default=False,
+                        help="Run test lookups against the database")
+    parser.add_argument('--path_to_score_results', type=str, default=None,
+                        help="Directory containing prediction score TSV files (required for --build)")
+    parser.add_argument('--path_to_path_results', type=str, default=None,
+                        help="Directory containing path result TSV files (required for --build)")
+    parser.add_argument('--database_name', type=str, default="ExplainableDTD.db",
+                        help="SQLite database filename")
+    parser.add_argument('--outdir', type=str, default="./",
+                        help="Output directory for the database file")
     args = parser.parse_args()
-
-    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
 
     if not args.build and not args.test:
         parser.print_help()
         sys.exit(2)
 
-    EDTDdb = BuildExplainableDTD(logger, args.path_to_score_results, args.path_to_path_results, database_name=args.database_name, outdir=args.outdir)
-
     if args.build:
-        logger.info("==== Creating tables ====")
-        EDTDdb.create_tables()
-        logger.info("==== Populating tables ====")
-        EDTDdb.populate_table()
-        logger.info("==== Creating indexes ====")
-        EDTDdb.create_indexes()
+        # Build mode: input directories are required
+        if not args.path_to_score_results or not args.path_to_path_results:
+            parser.error("--path_to_score_results and --path_to_path_results are required for --build")
+        db = BuildExplainableDTD(
+            path_to_score_results=args.path_to_score_results,
+            path_to_path_results=args.path_to_path_results,
+            database_name=args.database_name,
+            outdir=args.outdir,
+            build=True,
+        )
+        db.create_tables()
+        db.populate_table()
+        db.create_indexes()
+    else:
+        # Test-only mode: connect to existing database (run mode)
+        db = BuildExplainableDTD(
+            database_name=args.database_name,
+            outdir=args.outdir,
+            build=False,
+        )
 
-    if not args.test:
-        return
-
-    logger.info("==== Testing: top drugs by disease id ====")
-    logger.info(EDTDdb.get_top_drugs_for_disease('MONDO:0000313'))
-    logger.info("==== Testing: top paths by disease id ====")
-    logger.info(EDTDdb.get_top_paths_for_disease('MONDO:0000313'))
+    if args.test:
+        print("==== Testing: score table by disease ID ====", flush=True)
+        print(db.get_top_drugs_for_disease(disease_curie_ids='MONDO:0000313'))
+        print("==== Testing: top paths by disease ID ====", flush=True)
+        print(db.get_top_path(disease_curie_ids='MONDO:0000313'))
 
 
 if __name__ == "__main__":
     main()
+

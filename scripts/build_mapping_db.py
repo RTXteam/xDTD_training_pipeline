@@ -248,7 +248,7 @@ def main():
     parser.add_argument('--test', action="store_true", help="Run a quick test of the database", default=False)
     parser.add_argument('--nodes_jsonl', type=str, help="Path to nodes.jsonl file")
     parser.add_argument('--edges_jsonl', type=str, help="Path to edges.jsonl file")
-    parser.add_argument('--database_name', type=str, default="xdtd_mapping.db", help="Name of the database file")
+    parser.add_argument('--database_name', type=str, default="ExplainableDTD.db", help="Name of the database file")
     parser.add_argument('--outdir', type=str, default=".", help="Path to the output directory")
     parser.add_argument('--log_dir', type=str, default=os.path.join(ROOTPath, "log_folder"), help="The path of logfile folder")
     parser.add_argument('--log_name', type=str, default="build_mapping_db.log", help="Log file name")
