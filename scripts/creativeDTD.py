@@ -87,6 +87,7 @@ class creativeDTD:
 
         self.disease_curie = None
         self.top_N_drugs = None
+        self._filtered_drug_pool = None
 
     def set_query_disease(self, disease_curie: str):
         ok, normalized = utils.check_curie_available(
@@ -95,26 +96,70 @@ class creativeDTD:
         )
         if ok:
             self.disease_curie = normalized
+            self.top_N_drugs = None
+            self._filtered_drug_pool = None
             return True
         self.args.logger.warning(f"Can't find curie {disease_curie}")
         return False
+
+    def filter_drugs_with_paths(self):
+        """Pre-filter drug candidates to those reachable from the disease
+        via at least one KG path (length <= max_path).  This ensures every
+        drug that enters ``predict_top_N_drugs`` can later produce at least
+        one explanatory path.
+
+        Must be called after ``set_query_disease`` and before
+        ``predict_top_N_drugs``.
+        """
+        if not self.disease_curie:
+            self.args.logger.warning("No disease curie set. Call set_query_disease() first.")
+            return False
+
+        tgt_id = self.args.entity2id.get(self.disease_curie)
+        if tgt_id is None:
+            self.args.logger.warning(f"Disease {self.disease_curie} not in entity2id")
+            self._filtered_drug_pool = []
+            return False
+
+        cutoff = self.args.max_path
+        self._filtered_drug_pool = []
+
+        for drug in self.drug_curie_ids:
+            src_id = self.args.entity2id.get(drug)
+            if src_id is None:
+                continue
+            try:
+                next(gt.all_paths(self.G, src_id, tgt_id, cutoff=cutoff))
+                self._filtered_drug_pool.append(drug)
+            except StopIteration:
+                continue
+
+        self.args.logger.info(
+            f"Path filter: {len(self._filtered_drug_pool)}/{len(self.drug_curie_ids)} "
+            f"drugs have paths to {self.disease_curie} (cutoff={cutoff})"
+        )
+        return len(self._filtered_drug_pool) > 0
 
     def predict_top_N_drugs(self, N: int = 50, threshold: float = 0.6):
         if not self.disease_curie:
             self.args.logger.warning("No disease curie set. Call set_query_disease() first.")
             return None
 
-        self.args.logger.info(f"Predicting top {N} drugs for disease {self.disease_curie}")
+        drug_pool = self._filtered_drug_pool if self._filtered_drug_pool is not None else self.drug_curie_ids
+        self.args.logger.info(
+            f"Predicting top {N} drugs for disease {self.disease_curie} "
+            f"from {len(drug_pool)} candidates"
+        )
 
-        drug_embs = np.array([self.entity_embeddings_dict[d] for d in self.drug_curie_ids])
+        drug_embs = np.array([self.entity_embeddings_dict[d] for d in drug_pool])
         disease_emb = self.entity_embeddings_dict[self.disease_curie]
-        X = np.hstack([drug_embs, np.tile(disease_emb, (len(self.drug_curie_ids), 1))])
+        X = np.hstack([drug_embs, np.tile(disease_emb, (len(drug_pool), 1))])
         probs = self.ML_model.predict_proba(X)
 
         self.top_N_drugs = (
             pl.DataFrame({
-                'drug_id': self.drug_curie_ids,
-                'disease_id': [self.disease_curie] * len(self.drug_curie_ids),
+                'drug_id': drug_pool,
+                'disease_id': [self.disease_curie] * len(drug_pool),
                 'tn_score': probs[:, 0].tolist(),
                 'tp_score': probs[:, 1].tolist(),
                 'unknown_score': probs[:, 2].tolist(),
@@ -154,8 +199,8 @@ class creativeDTD:
 
         for row in self.top_N_drugs.iter_rows(named=True):
             source, target = row['drug_id'], row['disease_id']
-            src_id = utils.check_curie(source, self.args.entity2id)[1]
-            tgt_id = utils.check_curie(target, self.args.entity2id)[1]
+            src_id = self.args.entity2id.get(source)
+            tgt_id = self.args.entity2id.get(target)
             if src_id is None or tgt_id is None:
                 continue
 

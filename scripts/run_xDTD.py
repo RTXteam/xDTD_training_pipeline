@@ -80,6 +80,9 @@ if __name__ == "__main__":
         if not dtd.set_query_disease(disease):
             continue
 
+        if not dtd.filter_drugs_with_paths():
+            continue
+
         predicted_drugs = dtd.predict_top_N_drugs(main_args.N_drugs, main_args.threshold)
         if predicted_drugs is None:
             continue
