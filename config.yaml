@@ -49,4 +49,4 @@ PARALLEL_PRECOMPUTE:
   BATCH_SIZE: 200
 
 DATABASE:
-  DATABASE_NAME: 'ExplainableDTD_tier0-20260408.db'
+  DATABASE_NAME: 'ExplainableDTD_v1.0-tier0-20260408-all_with_paths.db'
