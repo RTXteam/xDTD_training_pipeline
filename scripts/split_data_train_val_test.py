@@ -1,13 +1,14 @@
-## Import Standard Packages
-import sys, os
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
-import random
-import math
 import argparse
+import json
+import math
+import os
 import pickle
-import copy
+import random
+import sys
+
+import numpy as np
+import polars as pl
+from sklearn.model_selection import train_test_split
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -16,290 +17,246 @@ ROOTPath = os.path.sep.join([*pathlist[:(ROOTindex + 1)]])
 sys.path.append(os.path.join(ROOTPath, 'scripts'))
 import utils
 
-def generate_rand_data(n, pairs, disease_list, drug_list, all_known_tp_pairs, existing_pairs=None):
 
-    if n is not None:
-        n_drug = n
-        n_disease = n
+def _stratified_split(pairs, train_val_test_size, label, random_state):
+    """Stratified train/val/test split of (source, target) pairs by source.
 
-    ## only use the tp data
-    pairs = pairs.loc[pairs['y'] == 1,:].reset_index(drop=True)
-    drug_in_data_pairs = list(set(pairs['source']))
-    disease_name_list = copy.deepcopy(disease_list)
-    disease_in_data_pairs = list(set(pairs['target']))
-    drug_name_list = copy.deepcopy(drug_list)
+    Sources that appear only once are forced into the training set so
+    sklearn's stratified split has at least 2 members per stratum.
+    """
+    pairs = pairs.select(['source', 'target']).unique(maintain_order=True)
 
-    ## create a check list for all tp an tn pairs
-    check_list_temp = {(all_known_tp_pairs.loc[index,'source'],all_known_tp_pairs.loc[index,'target']):1 for index in range(all_known_tp_pairs.shape[0])}
-    if existing_pairs is not None:
-        for index in range(existing_pairs.shape[0]):
-            if (existing_pairs.loc[index,'source'],existing_pairs.loc[index,'target']) not in check_list_temp:
-                check_list_temp[(existing_pairs.loc[index,'source'],existing_pairs.loc[index,'target'])] = 1
+    source_counts = pairs.group_by('source').len()
+    singleton_sources = set(
+        source_counts.filter(pl.col('len') == 1)['source'].to_list()
+    )
 
-    random_pairs = []
-    for drug in drug_in_data_pairs:
-        if n is None:
-            n_drug = len(pairs.loc[pairs['source']==drug,'y'])
-        count = 0
-        temp_dict = dict()
-        random.shuffle(disease_name_list)
-        for disease in disease_name_list:
-            if (drug, disease) not in check_list_temp and (drug, disease) not in temp_dict:
-                temp_dict[(drug, disease)] = 1
-                count += 1
-            if count == n_drug:
+    singletons = pairs.filter(pl.col('source').is_in(singleton_sources))
+    rest = pairs.filter(~pl.col('source').is_in(singleton_sources))
+
+    unique_src = rest['source'].unique().to_list()
+    src_to_cluster = {s: i for i, s in enumerate(unique_src)}
+    clusters = np.array([src_to_cluster[s] for s in rest['source'].to_list()])
+
+    n_target_train = math.ceil(pairs.height * train_val_test_size[0])
+    pad_size = n_target_train - singletons.height
+    n_val_test = pairs.height - n_target_train
+
+    train_idx, val_test_idx = train_test_split(
+        np.arange(rest.height),
+        train_size=pad_size / (pad_size + n_val_test),
+        random_state=random_state, shuffle=True, stratify=clusters,
+    )
+
+    train = pl.concat([singletons, rest[train_idx.tolist()].select(['source', 'target'])])
+    val_test = rest[val_test_idx.tolist()].select(['source', 'target'])
+
+    val_idx, test_idx = train_test_split(
+        np.arange(val_test.height),
+        train_size=train_val_test_size[1] / (train_val_test_size[1] + train_val_test_size[2]),
+        random_state=random_state, shuffle=True,
+    )
+
+    return (
+        train.with_columns(pl.lit(label).alias('y')),
+        val_test[val_idx.tolist()].with_columns(pl.lit(label).alias('y')),
+        val_test[test_idx.tolist()].with_columns(pl.lit(label).alias('y')),
+    )
+
+
+def _filter_expert_paths(split_pairs, entity2id, edf_idx, expert_rel_ent):
+    """Select expert-demonstration rows whose (source, target) match split_pairs."""
+    src_ids = [entity2id[s] for s in split_pairs['source'].to_list()]
+    tgt_ids = [entity2id[t] for t in split_pairs['target'].to_list()]
+
+    ids = []
+    for sid, tid in zip(src_ids, tgt_ids):
+        matches = edf_idx.filter(
+            (pl.col('0') == sid) & (pl.col('3') == tid)
+        )['idx'].to_list()
+        ids.extend(matches)
+
+    return [expert_rel_ent[0][ids], expert_rel_ent[1][ids]]
+
+
+def generate_rand_data(n, pairs, disease_list, drug_list, existing_set=None):
+    """Generate random drug-disease pairs that don't overlap existing pairs."""
+    tp_pairs = pairs.filter(pl.col('y') == 1)
+    drugs_in_pairs = tp_pairs['source'].unique().to_list()
+    diseases_in_pairs = tp_pairs['target'].unique().to_list()
+    drug_pool = list(drug_list)
+    disease_pool = list(disease_list)
+    excluded = set(existing_set) if existing_set else set()
+    random_frames = []
+
+    for drug in drugs_in_pairs:
+        n_drug = n if n is not None else tp_pairs.filter(pl.col('source') == drug).height
+        selected = []
+        random.shuffle(disease_pool)
+        for disease in disease_pool:
+            if (drug, disease) not in excluded:
+                selected.append((drug, disease))
+            if len(selected) == n_drug:
                 break
-        random_pairs += [pd.DataFrame(temp_dict.keys())]
+        if selected:
+            random_frames.append(pl.DataFrame(selected, schema=['source', 'target'], orient='row'))
 
-    for disease in disease_in_data_pairs:
-        if n is None:
-            n_disease = len(pairs.loc[pairs['target']==disease,'y'])
-        count = 0
-        temp_dict = dict()
-        random.shuffle(drug_name_list)
-        for drug in drug_name_list:
-            if (drug, disease) not in check_list_temp and (drug, disease) not in temp_dict:
-                temp_dict[(drug, disease)] = 1
-                count += 1
-            if count == n_disease:
+    for disease in diseases_in_pairs:
+        n_disease = n if n is not None else tp_pairs.filter(pl.col('target') == disease).height
+        selected = []
+        random.shuffle(drug_pool)
+        for drug in drug_pool:
+            if (drug, disease) not in excluded:
+                selected.append((drug, disease))
+            if len(selected) == n_disease:
                 break
-        random_pairs += [pd.DataFrame(temp_dict.keys())]
+        if selected:
+            random_frames.append(pl.DataFrame(selected, schema=['source', 'target'], orient='row'))
 
-    random_pairs = pd.concat(random_pairs).reset_index(drop=True).rename(columns={0:'source',1:'target'})
-    random_pairs['y'] = 2
-    
-    print(f'Number of random pairs: {random_pairs.shape[0]}', flush=True)
-
-    return random_pairs
+    result = pl.concat(random_frames).with_columns(pl.lit(2).alias('y'))
+    print(f'Number of random pairs: {result.height}', flush=True)
+    return result
 
 
-def split_df_into_train_val_test(df, train_val_test_size, expert_demonstration_tp_pairs, data_type='tp', seed=1024):
-
-    random_state = np.random.RandomState(seed) 
+def split_df_into_train_val_test(df, train_val_test_size, expert_tp_pairs, data_type='tp', seed=1024):
+    rs = np.random.RandomState(seed)
 
     if data_type == 'tp':
-        tp_pairs = df[['source','target']].drop_duplicates()
+        tp_pairs = df.select(['source', 'target']).unique(maintain_order=True)
+        in_expert = tp_pairs.join(
+            expert_tp_pairs.select(['source', 'target']),
+            on=['source', 'target'], how='inner',
+        )
+        not_in_expert = tp_pairs.join(
+            expert_tp_pairs.select(['source', 'target']),
+            on=['source', 'target'], how='anti',
+        )
 
-        tp_pairs_in_expert = expert_demonstration_tp_pairs
-        expert_demonstration_tp_pairs_dict = {(expert_demonstration_tp_pairs.loc[index,'source'],expert_demonstration_tp_pairs.loc[index,'target']):1 for index in range(len(expert_demonstration_tp_pairs))}
-        tp_pairs_not_in_expert =  pd.DataFrame([(tp_pairs.loc[index,'source'],tp_pairs.loc[index,'target']) for index in range(len(tp_pairs)) if (tp_pairs.loc[index,'source'],tp_pairs.loc[index,'target']) not in expert_demonstration_tp_pairs_dict]).rename(columns={0:'source',1:'target'})
+        train_ie, val_ie, test_ie = _stratified_split(in_expert, train_val_test_size, 1, rs)
+        train_nie, val_nie, test_nie = _stratified_split(not_in_expert, train_val_test_size, 1, rs)
 
-        ## split tp_pairs_in_expert into train set, val set and test set
-        count = tp_pairs_in_expert['source'].value_counts()
-        unique_temp = set(count.reset_index().loc[count.reset_index()['count']==1,'source'])
-        train_tp_pairs_in_expert_1 = tp_pairs_in_expert.loc[tp_pairs_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
-        rest_train_tp_pairs_in_expert = tp_pairs_in_expert.loc[~tp_pairs_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
-        pad_tp_size = math.ceil(len(tp_pairs_in_expert) * train_val_test_size[0]) - len(train_tp_pairs_in_expert_1)
-        val_test_size = (len(tp_pairs_in_expert) - math.ceil(len(tp_pairs_in_expert) * train_val_test_size[0]))
-        curie_to_id = {source:index for index, source in enumerate(set(rest_train_tp_pairs_in_expert['source']))}
-        rest_train_tp_pairs_in_expert = rest_train_tp_pairs_in_expert.apply(lambda row: [row[0],row[1],curie_to_id[row[0]]], axis=1, result_type='expand').rename(columns={0:'source', 1:'target', 2:'cluster'})
-
-        train_pad_index, val_test_index = train_test_split(np.array(list(rest_train_tp_pairs_in_expert.index)), train_size=pad_tp_size/(pad_tp_size+val_test_size), random_state=random_state, shuffle=True, stratify=rest_train_tp_pairs_in_expert['cluster'])
-        train_tp_pairs_in_expert_2 = rest_train_tp_pairs_in_expert.loc[list(train_pad_index),['source','target']].reset_index(drop=True)
-        train_tp_pairs_in_expert = pd.concat([train_tp_pairs_in_expert_1,train_tp_pairs_in_expert_2]).reset_index(drop=True)
-        val_test_tp_pairs_in_expert = rest_train_tp_pairs_in_expert.loc[list(val_test_index),['source','target']].reset_index(drop=True)
-
-        val_index, test_index = train_test_split(np.array(list(val_test_tp_pairs_in_expert.index)), train_size=train_val_test_size[1]/(train_val_test_size[1]+train_val_test_size[2]), random_state=random_state, shuffle=True)
-        val_tp_pairs_in_expert = val_test_tp_pairs_in_expert.loc[list(val_index),:].reset_index(drop=True)
-        test_tp_pairs_in_expert = val_test_tp_pairs_in_expert.loc[list(test_index),:].reset_index(drop=True)
-
-        train_tp_pairs_in_expert['y'] = 1
-        val_tp_pairs_in_expert['y'] = 1
-        test_tp_pairs_in_expert['y'] = 1
-
-        ## split tp_pairs_not_in_expert into train set, val set and test set
-        count = tp_pairs_not_in_expert['source'].value_counts()
-        unique_temp = set(count.reset_index().loc[count.reset_index()['count']==1,'source'])
-        train_tp_pairs_not_in_expert_1 = tp_pairs_not_in_expert.loc[tp_pairs_not_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
-        rest_train_tp_pairs_not_in_expert = tp_pairs_not_in_expert.loc[~tp_pairs_not_in_expert['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
-        pad_tp_size = math.ceil(len(tp_pairs_not_in_expert) * train_val_test_size[0]) - len(train_tp_pairs_not_in_expert_1)
-        val_test_size = (len(tp_pairs_not_in_expert) - math.ceil(len(tp_pairs_not_in_expert) * train_val_test_size[0]))
-        curie_to_id = {source:index for index, source in enumerate(set(rest_train_tp_pairs_not_in_expert['source']))}
-        rest_train_tp_pairs_not_in_expert = rest_train_tp_pairs_not_in_expert.apply(lambda row: [row[0],row[1],curie_to_id[row[0]]], axis=1, result_type='expand').rename(columns={0:'source', 1:'target', 2:'cluster'})
-
-        train_pad_index, val_test_index = train_test_split(np.array(list(rest_train_tp_pairs_not_in_expert.index)), train_size=pad_tp_size/(pad_tp_size+val_test_size), random_state=random_state, shuffle=True, stratify=rest_train_tp_pairs_not_in_expert['cluster'])  
-        train_tp_pairs_not_in_expert_2 = rest_train_tp_pairs_not_in_expert.loc[list(train_pad_index),['source','target']].reset_index(drop=True)
-        train_tp_pairs_not_in_expert = pd.concat([train_tp_pairs_not_in_expert_1,train_tp_pairs_not_in_expert_2]).reset_index(drop=True)
-        val_test_tp_pairs_not_in_expert = rest_train_tp_pairs_not_in_expert.loc[list(val_test_index),['source','target']].reset_index(drop=True)
-
-        val_index, test_index = train_test_split(np.array(list(val_test_tp_pairs_not_in_expert.index)), train_size=train_val_test_size[1]/(train_val_test_size[1]+train_val_test_size[2]), random_state=random_state, shuffle=True)
-        val_tp_pairs_not_in_expert = val_test_tp_pairs_not_in_expert.loc[list(val_index),:].reset_index(drop=True)
-        test_tp_pairs_not_in_expert = val_test_tp_pairs_not_in_expert.loc[list(test_index),:].reset_index(drop=True)
-
-        train_tp_pairs_not_in_expert['y'] = 1
-        val_tp_pairs_not_in_expert['y'] = 1
-        test_tp_pairs_not_in_expert['y'] = 1
-
-        return [(train_tp_pairs_in_expert, train_tp_pairs_not_in_expert), (val_tp_pairs_in_expert, val_tp_pairs_not_in_expert), (test_tp_pairs_in_expert, test_tp_pairs_not_in_expert)]
-
+        return [
+            (train_ie, train_nie),
+            (val_ie, val_nie),
+            (test_ie, test_nie),
+        ]
     else:
+        return list(_stratified_split(df, train_val_test_size, 0, rs))
 
-        tn_pairs = df[['source','target']].drop_duplicates()
 
-        ## split triples based on the ratio of train, valid and test sets
-        count = tn_pairs['source'].value_counts()
-        unique_temp = set(count.reset_index().loc[count.reset_index()['count']==1,'source'])
-        train_tn_pairs_1 = tn_pairs.loc[tn_pairs['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
-        rest_train_tn_pairs = tn_pairs.loc[~tn_pairs['source'].isin(unique_temp),['source','target']].reset_index(drop=True)
-        pad_tp_size = math.ceil(len(tn_pairs) * train_val_test_size[0]) - len(train_tn_pairs_1)
-        val_test_size = (len(tn_pairs) - math.ceil(len(tn_pairs) * train_val_test_size[0]))
-        curie_to_id = {source:index for index, source in enumerate(set(rest_train_tn_pairs['source']))}
-        rest_train_tn_pairs = rest_train_tn_pairs.apply(lambda row: [row[0],row[1],curie_to_id[row[0]]], axis=1, result_type='expand').rename(columns={0:'source', 1:'target', 2:'cluster'})
+def _pairs_to_set(df, src='source', tgt='target'):
+    return set(zip(df[src].to_list(), df[tgt].to_list()))
 
-        train_pad_index, val_test_index = train_test_split(np.array(list(rest_train_tn_pairs.index)), train_size=pad_tp_size/(pad_tp_size+val_test_size), random_state=random_state, shuffle=True, stratify=rest_train_tn_pairs['cluster'])        
-        train_tn_pairs_2 = rest_train_tn_pairs.loc[list(train_pad_index),['source','target']].reset_index(drop=True)
-        train_tn_pairs = pd.concat([train_tn_pairs_1,train_tn_pairs_2]).reset_index(drop=True)
-        val_test_tn_pairs = rest_train_tn_pairs.loc[list(val_test_index),['source','target']].reset_index(drop=True)
-
-        val_index, test_index = train_test_split(np.array(list(val_test_tn_pairs.index)), train_size=train_val_test_size[1]/(train_val_test_size[1]+train_val_test_size[2]), random_state=random_state, shuffle=True)
-        val_tn_pairs = val_test_tn_pairs.loc[list(val_index),:].reset_index(drop=True)
-        test_tn_pairs = val_test_tn_pairs.loc[list(test_index),:].reset_index(drop=True)
-
-        train_tn_pairs['y'] = 0
-        val_tn_pairs['y'] = 0
-        test_tn_pairs['y'] = 0
-
-        return [train_tn_pairs, val_tn_pairs, test_tn_pairs]
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="log file name", default="split_data_train_val_test.log")
+    parser.add_argument("--log_name", type=str, help="log file name", default="step11_split_data_train_val_test.log")
     parser.add_argument("--graph_edges", type=str, help="Filtered graph edge file", default=os.path.join(ROOTPath, "data", "filtered_graph_edges.txt"))
-    parser.add_argument('--tp_pairs', type=str, help='Path to a file containg true positive pairs', default=os.path.join(ROOTPath, "data", "tp_pairs.txt"))
-    parser.add_argument('--tn_pairs', type=str, help='Path to a file containg true negative pairs', default=os.path.join(ROOTPath, "data", "tn_pairs.txt"))
-    parser.add_argument('--entity2freq', type=str, help='Path to a file containing entity with frequency', default=os.path.join(ROOTPath, "data", "entity2freq.txt"))
-    parser.add_argument('--type2freq', type=str, help='Path to a file containing entity type with frequency', default=os.path.join(ROOTPath, "data", "type2freq.txt"))
-    parser.add_argument('--entity2typeid', type=str, help='Path to a file mapping entity to entity type id', default=os.path.join(ROOTPath, "data", "entity2typeid.pkl"))
-    parser.add_argument('--all_known_tps', type=str, help='Path to a file containg all known drug-disease pairs', default=os.path.join(ROOTPath, "data", "all_known_tps.txt"))
-    parser.add_argument('--filtered_expert_paths', type=str, help='Path to a file containg filtered expert paths', default=os.path.join(ROOTPath, "data", "expert_path_files", f"expert_demonstration_paths_max3_filtered.pkl"))
-    parser.add_argument('--filtered_path_relation_entity', type=str, help='Path to a file containg the relations and entities of filtered expert paths', default=os.path.join(ROOTPath, "data", "expert_path_files", f'expert_demonstration_relation_entity_max3_filtered.pkl'))
-    parser.add_argument("--n_random_test_mrr_hk", type=int, help="Number of random pairs assigned to each TP drug in test set for MRR and H@K", default=500)
-    parser.add_argument("--train_val_test_size", type=str, help="Proportion of training data, validation data and test data", default="[0.8, 0.1, 0.1]")
-    parser.add_argument('--seed', type=int, help='Random seed (default: 1023)', default=1023)
-    parser.add_argument('--max_path', type=int, help='Maximum length of path', default=3)
-    parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
+    parser.add_argument('--tp_pairs', type=str, help='Path to true positive pairs', default=os.path.join(ROOTPath, "data", "ground_truth_pairs", "tp_pairs.txt"))
+    parser.add_argument('--tn_pairs', type=str, help='Path to true negative pairs', default=os.path.join(ROOTPath, "data", "ground_truth_pairs", "tn_pairs.txt"))
+    parser.add_argument('--entity2freq', type=str, help='Entity frequency file', default=os.path.join(ROOTPath, "data", "entity2freq.txt"))
+    parser.add_argument('--type2freq', type=str, help='Entity type frequency file', default=os.path.join(ROOTPath, "data", "type2freq.txt"))
+    parser.add_argument('--entity2typeid', type=str, help='Entity→type-id mapping', default=os.path.join(ROOTPath, "data", "entity2typeid.pkl"))
+    parser.add_argument('--filtered_expert_paths', type=str, help='Filtered expert paths pickle', default=os.path.join(ROOTPath, "data", "expert_path_files", "expert_demonstration_paths_max3_filtered.pkl"))
+    parser.add_argument('--filtered_path_relation_entity', type=str, help='Expert path relation/entity pickle', default=os.path.join(ROOTPath, "data", "expert_path_files", "expert_demonstration_relation_entity_max3_filtered.pkl"))
+    parser.add_argument("--train_val_test_size", type=str, help="Train/val/test proportions as JSON list", default="[0.8, 0.1, 0.1]")
+    parser.add_argument('--seed', type=int, help='Random seed', default=1023)
+    parser.add_argument('--max_path', type=int, help='Maximum path length', default=3)
+    parser.add_argument("--output_folder", type=str, help="Output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 
     random.seed(args.seed)
-    train_val_test_size = eval(args.train_val_test_size)
-    class InputError(Exception):
-        pass
-    if not sum(train_val_test_size)==1:
-        raise InputError("The sum of percents in train_val_test_size should be 1")
+    train_val_test_size = json.loads(args.train_val_test_size)
+    if abs(sum(train_val_test_size) - 1.0) > 1e-9:
+        raise ValueError("train_val_test_size must sum to 1")
 
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
     logger.info(args)
 
-    triples_without_tp_tn_triples = pd.read_csv(args.graph_edges, sep='\t', header=0)
-    triples_without_tp_tn_triples = triples_without_tp_tn_triples[['source','target','predicate']]
-    triple_size = len(triples_without_tp_tn_triples)
-    triples_without_tp_tn_triples = triples_without_tp_tn_triples.drop_duplicates().reset_index(drop=True)
-    tp_triples = pd.read_csv(args.tp_pairs, sep='\t', header=0)
-    tp_triples['predicate'] = 'biolink:has_effect'
-    tn_triples = pd.read_csv(args.tn_pairs, sep='\t', header=0)
-    tn_triples['predicate'] = 'biolink:has_no_effect'
-    all_triples = pd.concat([triples_without_tp_tn_triples,tp_triples,tn_triples]).reset_index(drop=True)
-    all_triples = all_triples.drop_duplicates()
-    all_nodes = set()
-    all_nodes.update(set(all_triples.source))
-    all_nodes.update(set(all_triples.target))
-    all_triples.to_csv(os.path.join(args.output_folder, 'all_triples.txt'), sep='\t', index=None)
+    ## ── Build unified triple set ──────────────────────────────────────────────
+    graph_edges = (
+        pl.read_csv(args.graph_edges, separator='\t')
+        .select(['source', 'target', 'predicate'])
+        .unique(maintain_order=True)
+    )
+    tp_triples = pl.read_csv(args.tp_pairs, separator='\t').select([
+        pl.col('drug_id').alias('source'), pl.col('disease_id').alias('target'),
+    ]).with_columns(pl.lit('biolink:has_effect').alias('predicate'))
+    tn_triples = pl.read_csv(args.tn_pairs, separator='\t').select([
+        pl.col('drug_id').alias('source'), pl.col('disease_id').alias('target'),
+    ]).with_columns(pl.lit('biolink:has_no_effect').alias('predicate'))
 
-    ## find all disease ids
+    all_triples = pl.concat([graph_edges, tp_triples, tn_triples]).unique(maintain_order=True)
+    all_triples.write_csv(os.path.join(args.output_folder, 'all_triples.txt'), separator='\t')
+
+    ## ── Load entity/type mappings and derive drug/disease lists ───────────────
     entity2id, id2entity = utils.load_index(args.entity2freq)
     type2id, id2type = utils.load_index(args.type2freq)
-    with open(args.entity2typeid, 'rb') as infile:
-        entity2typeid = pickle.load(infile)
-    disease_type = ['biolink:Disease', 'biolink:PhenotypicFeature', 'biolink:BehavioralFeature', 'biolink:DiseaseOrPhenotypicFeature']
-    disease_type_ids = [type2id[x] for x in disease_type]
-    disease_names = [id2entity[index] for index, typeid in enumerate(entity2typeid) if typeid in disease_type_ids]
-    drug_type = ['biolink:Drug', 'biolink:SmallMolecule']
-    drug_type_ids = [type2id[x] for x in drug_type]
-    drug_names = [id2entity[index] for index, typeid in enumerate(entity2typeid) if typeid in drug_type_ids]
-    all_p_tp_pairs = pd.read_csv(args.all_known_tps, sep='\t', header=0)
-    all_known_tp_pairs =  all_p_tp_pairs.drop_duplicates().reset_index(drop=True)
+    with open(args.entity2typeid, 'rb') as f:
+        entity2typeid = pickle.load(f)
 
-    ## save the 'treat' and 'not_treat' triples as train triples, valid triples and test triples
-    ## 'treat'
-    with open(args.filtered_expert_paths, 'rb') as infile:
-        temp = pickle.load(infile)
-    expert_demonstration_tp_pairs = pd.DataFrame(temp.keys(), columns=['source','target'])
-    (train_tp_pairs_in_expert, train_tp_pairs_not_in_expert), (val_tp_pairs_in_expert, val_tp_pairs_not_in_expert), (test_tp_pairs_in_expert, test_tp_pairs_not_in_expert) = split_df_into_train_val_test(tp_triples, train_val_test_size, expert_demonstration_tp_pairs, data_type='tp', seed=args.seed)
+    disease_type_ids = {type2id[t] for t in ['biolink:Disease', 'biolink:PhenotypicFeature']}
+    drug_type_ids = {type2id[t] for t in ['biolink:Drug','biolink:SmallMolecule','biolink:ChemicalEntity']}
+    disease_ids = [id2entity[i] for i, tid in enumerate(entity2typeid) if tid in disease_type_ids]
+    drug_ids = [id2entity[i] for i, tid in enumerate(entity2typeid) if tid in drug_type_ids]
+    ## ── Split TP/TN into train/val/test ──────────────────────────────────────
+    with open(args.filtered_expert_paths, 'rb') as f:
+        expert_paths = pickle.load(f)
+    expert_tp_pairs = pl.DataFrame(list(expert_paths.keys()), schema=['source', 'target'], orient='row')
 
-    ## 'not treat'
-    train_tn_pairs, val_tn_pairs, test_tn_pairs = split_df_into_train_val_test(tn_triples, train_val_test_size, None, 'tn', seed=args.seed)
+    (train_tp_ie, train_tp_nie), (val_tp_ie, val_tp_nie), (test_tp_ie, test_tp_nie) = \
+        split_df_into_train_val_test(tp_triples, train_val_test_size, expert_tp_pairs, data_type='tp', seed=args.seed)
+    train_tn, val_tn, test_tn = split_df_into_train_val_test(tn_triples, train_val_test_size, None, 'tn', seed=args.seed)
 
-    pretrain_data_train_pairs = pd.concat([train_tp_pairs_in_expert, train_tp_pairs_not_in_expert, train_tn_pairs]).reset_index(drop=True)
-    pretrain_data_train_pairs = pretrain_data_train_pairs.sample(frac=1).reset_index(drop=True)
-    pretrain_data_val_pairs = pd.concat([val_tp_pairs_in_expert, val_tp_pairs_not_in_expert, val_tn_pairs]).reset_index(drop=True)
-    pretrain_data_val_pairs = pretrain_data_val_pairs.sample(frac=1).reset_index(drop=True)
-    pretrain_data_test_pairs = pd.concat([test_tp_pairs_in_expert, test_tp_pairs_not_in_expert, test_tn_pairs]).reset_index(drop=True)
-    pretrain_data_test_pairs = pretrain_data_test_pairs.sample(frac=1).reset_index(drop=True)
+    pretrain_train = pl.concat([train_tp_ie, train_tp_nie, train_tn]).sample(fraction=1.0, shuffle=True)
+    pretrain_val = pl.concat([val_tp_ie, val_tp_nie, val_tn]).sample(fraction=1.0, shuffle=True)
+    pretrain_test = pl.concat([test_tp_ie, test_tp_nie, test_tn]).sample(fraction=1.0, shuffle=True)
 
-    existing_pairs = pd.concat([pretrain_data_train_pairs,pretrain_data_val_pairs,pretrain_data_test_pairs]).reset_index(drop=True)
-    random_pairs = generate_rand_data(None, pretrain_data_train_pairs, disease_names, drug_names, all_known_tp_pairs, existing_pairs)
-    pretrain_data_train_pairs = pd.concat([pretrain_data_train_pairs,random_pairs]).reset_index(drop=True).sample(frac=1).reset_index(drop=True)
+    ## ── Generate random pairs for each split ────────────────────────────────
+    for split_name, split_df_holder in [('train', [pretrain_train]), ('val', [pretrain_val]), ('test', [pretrain_test])]:
+        all_existing = _pairs_to_set(pl.concat([pretrain_train, pretrain_val, pretrain_test]))
+        rand = generate_rand_data(None, split_df_holder[0], disease_ids, drug_ids, all_existing)
+        split_df_holder[0] = pl.concat([split_df_holder[0], rand]).sample(fraction=1.0, shuffle=True)
+        if split_name == 'train':
+            pretrain_train = split_df_holder[0]
+        elif split_name == 'val':
+            pretrain_val = split_df_holder[0]
+        else:
+            pretrain_test = split_df_holder[0]
 
-    existing_pairs = pd.concat([pretrain_data_train_pairs,pretrain_data_val_pairs,pretrain_data_test_pairs]).reset_index(drop=True)
-    random_pairs = generate_rand_data(None, pretrain_data_val_pairs, disease_names, drug_names, all_known_tp_pairs, existing_pairs)
-    pretrain_data_val_pairs = pd.concat([pretrain_data_val_pairs,random_pairs]).reset_index(drop=True).sample(frac=1).reset_index(drop=True)
+    ## ── Save pretrain data ───────────────────────────────────────────────────
+    pretrain_dir = os.path.join(args.output_folder, 'pretrain_reward_shaping_model_train_val_test_data_3class')
+    os.makedirs(pretrain_dir, exist_ok=True)
+    pretrain_train.write_csv(os.path.join(pretrain_dir, 'train_pairs.txt'), separator='\t')
+    pretrain_val.write_csv(os.path.join(pretrain_dir, 'val_pairs.txt'), separator='\t')
+    pretrain_test.write_csv(os.path.join(pretrain_dir, 'test_pairs.txt'), separator='\t')
 
-    existing_pairs = pd.concat([pretrain_data_train_pairs,pretrain_data_val_pairs,pretrain_data_test_pairs]).reset_index(drop=True)
-    random_pairs = generate_rand_data(None, pretrain_data_test_pairs, disease_names, drug_names, all_known_tp_pairs, existing_pairs)
-    pretrain_data_test_pairs = pd.concat([pretrain_data_test_pairs,random_pairs]).reset_index(drop=True).sample(frac=1).reset_index(drop=True)
+    ## ── Save RL model data ───────────────────────────────────────────────────
+    rl_dir = os.path.join(args.output_folder, 'RL_model_train_val_test_data')
+    os.makedirs(rl_dir, exist_ok=True)
 
-    existing_pairs = pd.concat([pretrain_data_train_pairs,pretrain_data_val_pairs,pretrain_data_test_pairs]).reset_index(drop=True)
-    pretrain_data_val_test_pairs = pd.concat([pretrain_data_val_pairs,pretrain_data_test_pairs]).reset_index(drop=True)
-    val_test_random_pairs = generate_rand_data(args.n_random_test_mrr_hk, pretrain_data_val_test_pairs, disease_names, drug_names, all_known_tp_pairs, existing_pairs)
+    rl_train = train_tp_ie
+    rl_val = val_tp_ie
+    rl_test = test_tp_ie
+    rl_all = pl.concat([rl_train, rl_val, rl_test])
 
-    args.pretrain_outdir_3class = os.path.join(args.output_folder,'pretrain_reward_shaping_model_train_val_test_random_data_3class')
-    if not os.path.isdir(args.pretrain_outdir_3class):
-        os.mkdir(args.pretrain_outdir_3class)
+    rl_train.write_csv(os.path.join(rl_dir, 'train_pairs.txt'), separator='\t')
+    rl_val.write_csv(os.path.join(rl_dir, 'val_pairs.txt'), separator='\t')
+    rl_test.write_csv(os.path.join(rl_dir, 'test_pairs.txt'), separator='\t')
+    rl_all.write_csv(os.path.join(rl_dir, 'all_pairs.txt'), separator='\t')
 
-    pretrain_data_train_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'train_pairs.txt'), sep='\t', index=None)
-    pretrain_data_val_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'val_pairs.txt'), sep='\t', index=None)
-    pretrain_data_test_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'test_pairs.txt'), sep='\t', index=None)
-    val_test_random_pairs.to_csv(os.path.join(args.pretrain_outdir_3class, 'random_pairs.txt'), sep='\t', index=None)
+    ## ── Split expert demonstration paths by train/val/test ───────────────────
+    with open(args.filtered_path_relation_entity, 'rb') as f:
+        expert_rel_ent = pickle.load(f)
 
-    ## generate train set, val set and test set for RL model
-    args.rl_outdir = os.path.join(args.output_folder, 'RL_model_train_val_test_data')
-    if not os.path.isdir(args.rl_outdir):
-        os.makedirs(args.rl_outdir)
+    rel_ent_np = expert_rel_ent[1].numpy()
+    col_names = [str(i) for i in range(rel_ent_np.shape[1])]
+    edf_idx = pl.DataFrame(rel_ent_np, schema=col_names).with_row_index('idx')
 
-    rl_train_tp_pairs = train_tp_pairs_in_expert
-    rl_val_tp_pairs = val_tp_pairs_in_expert
-    rl_test_tp_pairs = test_tp_pairs_in_expert
-    rl_tp_pairs = pd.concat([rl_train_tp_pairs,rl_val_tp_pairs,rl_test_tp_pairs]).reset_index(drop=True)
-
-    rl_train_tp_pairs.to_csv(os.path.join(args.rl_outdir, 'train_pairs.txt'), sep='\t', index=None)
-    rl_val_tp_pairs.to_csv(os.path.join(args.rl_outdir, 'val_pairs.txt'), sep='\t', index=None)
-    rl_test_tp_pairs.to_csv(os.path.join(args.rl_outdir, 'test_pairs.txt'), sep='\t', index=None)
-    rl_tp_pairs.to_csv(os.path.join(args.rl_outdir, 'all_pairs.txt'), sep='\t', index=None)
-
-    ## split expert paths based on train set, validation set and test set
-    with open(args.filtered_path_relation_entity,'rb') as infile:
-        expert_demonstration_relation_entity = pickle.load(infile)
-
-    expert_demonstration_relation_entity_df = pd.DataFrame(expert_demonstration_relation_entity[1].numpy())
-
-    train_temp = rl_train_tp_pairs.apply(lambda row: [entity2id[row[0]],entity2id[row[1]]], axis=1, result_type='expand')
-    id_list = [list(expert_demonstration_relation_entity_df.loc[(expert_demonstration_relation_entity_df[0]==train_temp.loc[index,0]) & (expert_demonstration_relation_entity_df[3]==train_temp.loc[index,1]),:].index) for index in range(len(train_temp))]
-    ids = [y for x in id_list for y in x]
-    train_expert_demonstration_relation_entity = [expert_demonstration_relation_entity[0][ids], expert_demonstration_relation_entity[1][ids]]
-    with open(os.path.join(args.output_folder, "expert_path_files", f'train_expert_demonstration_relation_entity_max{args.max_path}_filtered.pkl'),'wb') as outfile:
-        pickle.dump(train_expert_demonstration_relation_entity, outfile)
-
-    val_temp = rl_val_tp_pairs.apply(lambda row: [entity2id[row[0]],entity2id[row[1]]], axis=1, result_type='expand')
-    id_list = [list(expert_demonstration_relation_entity_df.loc[(expert_demonstration_relation_entity_df[0]==val_temp.loc[index,0]) & (expert_demonstration_relation_entity_df[3]==val_temp.loc[index,1]),:].index) for index in range(len(val_temp))]
-    ids = [y for x in id_list for y in x]
-    val_expert_demonstration_relation_entity = [expert_demonstration_relation_entity[0][ids], expert_demonstration_relation_entity[1][ids]]
-    with open(os.path.join(args.output_folder, "expert_path_files", f'val_expert_demonstration_relation_entity_max{args.max_path}_filtered.pkl'),'wb') as outfile:
-        pickle.dump(val_expert_demonstration_relation_entity, outfile)
-
-    test_temp = rl_test_tp_pairs.apply(lambda row: [entity2id[row[0]],entity2id[row[1]]], axis=1, result_type='expand')
-    id_list = [list(expert_demonstration_relation_entity_df.loc[(expert_demonstration_relation_entity_df[0]==test_temp.loc[index,0]) & (expert_demonstration_relation_entity_df[3]==test_temp.loc[index,1]),:].index) for index in range(len(test_temp))]
-    ids = [y for x in id_list for y in x]
-    test_expert_demonstration_relation_entity = [expert_demonstration_relation_entity[0][ids], expert_demonstration_relation_entity[1][ids]]
-    with open(os.path.join(args.output_folder, "expert_path_files", f'test_expert_demonstration_relation_entity_max{args.max_path}_filtered.pkl'),'wb') as outfile:
-        pickle.dump(test_expert_demonstration_relation_entity, outfile)
+    expert_dir = os.path.join(args.output_folder, 'expert_path_files')
+    for split_name, split_pairs in [('train', rl_train), ('val', rl_val), ('test', rl_test)]:
+        split_expert = _filter_expert_paths(split_pairs, entity2id, edf_idx, expert_rel_ent)
+        out_path = os.path.join(expert_dir, f'{split_name}_expert_demonstration_relation_entity_max{args.max_path}_filtered.pkl')
+        with open(out_path, 'wb') as f:
+            pickle.dump(split_expert, f)

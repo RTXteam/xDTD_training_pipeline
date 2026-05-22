@@ -373,7 +373,7 @@ class DiscriminatorActorCritic(ActorCritic):
         expert_action = [action.to(device) for action in expert_batch.action]
         total_loss = 0.0
 
-        label = torch.tensor(label).float().view(-1, 1).to(device)
+        label = torch.tensor(label, dtype=torch.float32).view(-1, 1).to(device)
 
         generator_logit = self.discriminator(state_input, action)
         expert_logit = self.discriminator(expert_state_input, expert_action)
@@ -391,7 +391,7 @@ class DiscriminatorActorCritic(ActorCritic):
 
     def update_metadiscriminator(self, expert_metapath, metapath, label, optimizer, device):
 
-        label = torch.tensor(label).float().view(-1, 1).to(device)
+        label = torch.tensor(label, dtype=torch.float32).view(-1, 1).to(device)
         expert_metapath = expert_metapath.to(device)
         metapath = metapath.to(device)
 

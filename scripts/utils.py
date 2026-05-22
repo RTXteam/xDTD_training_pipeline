@@ -1,29 +1,132 @@
-import numpy as np
-import os, sys
+import collections
+import functools
 import logging
 import logging.handlers
+import math
+import os
+import pickle
+import random
+import re
+import sys
+
+import graph_tool.all as gt
+import joblib
+import matplotlib.pyplot as plt
+import numpy as np
+import polars as pl
+import requests
 import torch
 import torch.nn as nn
+from biolink_helper_pkg import BiolinkHelper
+from sklearn.metrics import f1_score, precision_recall_curve
 from torch.autograd import Variable
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
-import random
-import math
-import re
 from tqdm import tqdm
-import pickle
-import joblib
-import graph_tool.all as gt
-# from bmt import Toolkit
-from biolink_helper import BiolinkHelper
-from neo4j import GraphDatabase
-from sklearn.metrics import f1_score
-from models import Transition
-plt.switch_backend('agg')
-from node_synonymizer import NodeSynonymizer
-nodesynonymizer = NodeSynonymizer()
 
+from models import Transition
+
+plt.switch_backend('agg')
+
+## ── BiolinkHelper singleton ─────────────────────────────────────────────
+@functools.lru_cache(maxsize=1)
+def get_biolink_helper(biolink_version='4.2.0'):
+    """Return a lazily-initialized, cached BiolinkHelper instance."""
+    pathlist = os.getcwd().split(os.path.sep)
+    root_index = pathlist.index("xDTD_training_pipeline")
+    root_path = os.path.sep.join([*pathlist[:(root_index + 1)]])
+    biolink_cache = os.path.join(root_path, "data", "biolink_cache")
+    os.makedirs(biolink_cache, exist_ok=True)
+    return BiolinkHelper(biolink_version=biolink_version, cached_path=biolink_cache)
+
+
+def get_primary_category(categories, biolink_version='4.2.0'):
+    """Pick the most specific non-mixin, non-NamedThing category using BiolinkHelper."""
+    if not categories:
+        return 'biolink:NamedThing'
+    bh = get_biolink_helper(biolink_version)
+    non_mixin = bh.filter_out_mixins(categories)
+    non_mixin = [c for c in non_mixin if c != 'biolink:NamedThing']
+    if not non_mixin:
+        return 'biolink:NamedThing'
+    if len(non_mixin) == 1:
+        return non_mixin[0]
+    return min(non_mixin, key=lambda c: len(bh.get_descendants(c, include_mixins=False)))
+
+
+def get_leaf_categories(categories, biolink_version='4.2.0'):
+    """Return all leaf (most specific) non-mixin categories from a list.
+
+    A category is a "leaf" if no other category in the set is more specific
+    (i.e. it is not an ancestor of any other category in the set).
+    """
+    if not categories:
+        return ['biolink:NamedThing']
+    bh = get_biolink_helper(biolink_version)
+    non_mixin = bh.filter_out_mixins(categories)
+    non_mixin = [c for c in non_mixin if c != 'biolink:NamedThing']
+    if not non_mixin:
+        return ['biolink:NamedThing']
+    all_ancestors = set()
+    for cat in non_mixin:
+        ancestors = set(bh.get_ancestors(cat, include_mixins=False))
+        ancestors.discard(cat)
+        all_ancestors.update(ancestors)
+    leaves = [c for c in non_mixin if c not in all_ancestors]
+    return leaves if leaves else ['biolink:NamedThing']
+
+
+## ── Node Normalization API helpers ──────────────────────────────────────
+NODE_NORM_URL = 'https://nodenormalization-sri.renci.org/1.5/get_normalized_nodes'
+_node_norm_cache = {}
+
+
+def batch_normalize_curies(curies, batch_size=1000):
+    """Pre-fill the Node Norm cache for a list of CURIEs in batches."""
+    uncached = [c for c in set(curies) if c is not None and c not in _node_norm_cache]
+    if not uncached:
+        return
+    for i in range(0, len(uncached), batch_size):
+        batch = uncached[i:i + batch_size]
+        try:
+            resp = requests.post(
+                NODE_NORM_URL,
+                json={"curies": batch, "conflation": True, "drug_chemical_conflation": True},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            results = resp.json()
+        except Exception:
+            for c in batch:
+                _node_norm_cache.setdefault(c, None)
+            continue
+        for c in batch:
+            info = results.get(c)
+            if info is not None:
+                _node_norm_cache[c] = {
+                    'preferred_curie': info['id']['identifier'],
+                    'preferred_name': info['id'].get('label'),
+                    'types': info.get('type', []),
+                }
+            else:
+                _node_norm_cache[c] = None
+
+
+def get_node_norm_info(curie):
+    """Get full normalized info for a CURIE via Node Norm API (cached).
+    Returns dict with preferred_curie, preferred_name, types; or None."""
+    if curie is None:
+        return None
+    if curie not in _node_norm_cache:
+        batch_normalize_curies([curie])
+    return _node_norm_cache.get(curie)
+
+
+def get_canonical_curie(curie):
+    """Get the canonical/preferred CURIE via Node Norm API (cached)."""
+    info = get_node_norm_info(curie)
+    return info['preferred_curie'] if info else None
+
+
+## ── Constants ────────────────────────────────────────────────────────────
 SELF_LOOP_RELATION = 'SELF_LOOP_RELATION'
 DUMMY_RELATION = 'DUMMY_RELATION'
 DUMMY_ENTITY = 'DUMMY_ENTITY'
@@ -34,9 +137,11 @@ DUMMY_ENTITY_ID = 0
 EPSILON = float(np.finfo(float).eps)
 HUGE_INT = 1e31
 TINY_VALUE = 1e-41
-NGD_normalizer = 3.7e+7 * 20  # From PubMed home page there are 35 million articles (based on the information on https://pubmed.ncbi.nlm.nih.gov/ on 08/09/2023); avg 20 MeSH terms per article
+NGD_normalizer = 4.0e+7 * 20  # ~40M PubMed articles x ~20 MeSH terms each (as of 2026-04-04)
 
-class ACDataLoader(object):
+
+## ── Data loading helpers ─────────────────────────────────────────────────
+class ACDataLoader:
     def __init__(self, indexes, batch_size, permutation=True):
         self.indexes = np.array(indexes)
         self.num_paths = len(indexes)
@@ -67,87 +172,51 @@ class ACDataLoader(object):
         self._start_idx = end_idx
         return batch_indexes.tolist()
 
-class Neo4jConnection:
-    
-    def __init__(self, uri, user, pwd):
-        self.__uri = uri
-        self.__user = user
-        self.__pwd = pwd
-        self.__driver = None
-        try:
-            self.__driver = GraphDatabase.driver(self.__uri, auth=(self.__user, self.__pwd))
-        except Exception as e:
-            print("Failed to create the driver:", e)
-        
-    def close(self):
-        if self.__driver is not None:
-            self.__driver.close()
-        
-    def query(self, query, db=None):
-        assert self.__driver is not None, "Driver not initialized!"
-        session = None
-        response = None
-        try: 
-            session = self.__driver.session(database=db) if db is not None else self.__driver.session() 
-            response = pd.DataFrame(session.run(query))
-        except Exception as e:
-            print("Query failed:", e)
-        finally: 
-            if session is not None:
-                session.close()
-        return response
 
+## ── Text cleanup and NGD ─────────────────────────────────────────────────
 def calculate_ngd(concept_pubmed_ids):
-
+    """Normalized Google Distance between two sets of PubMed IDs."""
     if concept_pubmed_ids[0] is None or concept_pubmed_ids[1] is None:
         return None
-
-    marginal_counts = list(map(lambda pmid_list: len(set(pmid_list)), concept_pubmed_ids))
-    joint_count = len(set(concept_pubmed_ids[0]).intersection(set(concept_pubmed_ids[1])))
-
-    if 0 in marginal_counts or 0. in marginal_counts:
+    marginal_counts = [len(set(pmids)) for pmids in concept_pubmed_ids]
+    joint_count = len(set(concept_pubmed_ids[0]) & set(concept_pubmed_ids[1]))
+    if 0 in marginal_counts or joint_count == 0:
         return None
-    elif joint_count == 0 or joint_count == 0.:
+    try:
+        log_marginals = [math.log(c) for c in marginal_counts]
+        return (max(log_marginals) - math.log(joint_count)) / (math.log(NGD_normalizer) - min(log_marginals))
+    except ValueError:
         return None
-    else:
-        try:
-            return (max([math.log(count) for count in marginal_counts]) - math.log(joint_count)) / \
-                (math.log(NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
-        except ValueError:
-            return None
 
 def clean_up_desc(string):
-    if type(string) is str:
-        # Removes all of the "UMLS Semantic Type: UMLS_STY:XXXX;" bits from descriptions
-        string = re.sub("UMLS Semantic Type: UMLS_STY:[a-zA-Z][0-9]{3}[;]?", "", string).strip().strip(";")
+    if isinstance(string, str):
+        string = re.sub(r"UMLS Semantic Type: UMLS_STY:[a-zA-Z][0-9]{3}[;]?", "", string).strip().strip(";")
         if string == 'None':
             return ''
-        elif len(re.findall("^COMMENTS: ", string)) != 0:
-            return re.sub("^COMMENTS: ","", string)
-        elif len(re.findall("-!- FUNCTION: ", string)) != 0:
-            part1 = [part for part in string.split('-!-') if len(re.findall("^ FUNCTION: ", part)) != 0][0].replace(' FUNCTION: ','')
-            part2 = re.sub(' \{ECO:.*\}.','',re.sub(" \(PubMed:[0-9]*,? ?(PubMed:[0-9]*,?)?\)","",part1))
-            return part2
-        elif len(re.findall("Check for \"https:\/\/www\.cancer\.gov\/", string)) != 0:
-            return re.sub("Check for \"https:\/\/www\.cancer\.gov\/.*\" active clinical trials using this agent. \(\".*NCI Thesaurus\); ","",string)
+        elif re.match(r"^COMMENTS: ", string):
+            return re.sub(r"^COMMENTS: ", "", string)
+        elif "-!- FUNCTION: " in string:
+            part1 = [part for part in string.split('-!-') if re.match(r"^ FUNCTION: ", part)][0].replace(' FUNCTION: ', '')
+            return re.sub(r' \{ECO:.*\}.', '', re.sub(r" \(PubMed:[0-9]*,? ?(PubMed:[0-9]*,?)?\)", "", part1))
+        elif re.search(r'Check for "https://www\.cancer\.gov/', string):
+            return re.sub(r'Check for "https://www\.cancer\.gov/.*" active clinical trials using this agent\. \(".*NCI Thesaurus\); ', '', string)
         else:
             return string
     elif string is None:
         return ''
     else:
-        raise ValueError('Not expected type {type(string)}')
+        raise ValueError(f'Not expected type {type(string)}')
 
 def clean_up_name(string):
-    if type(string) is str:
-        if string == 'None':
-            return ''
-        else:
-            return string
+    if isinstance(string, str):
+        return '' if string == 'None' else string
     elif string is None:
         return ''
     else:
-        raise ValueError('Not expected type {type(string)}')
+        raise ValueError(f'Not expected type {type(string)}')
 
+
+## ── Torch / GPU utility functions ────────────────────────────────────────
 def detach_module(mdl):
     for param in mdl.parameters():
         param.requires_grad = False
@@ -173,74 +242,133 @@ def load_index(input_path):
             id_to_name[index] = name
     return name_to_id, id_to_name
 
-def get_depth_of_predicate(predicate_list, biolink_version='3.1.2'):
-    # toolkit = Toolkit() for biolink 1.8.1
-    # return {predicate:len(toolkit.get_ancestors(predicate)) for predicate in predicate_list}
-    biolink_helper = BiolinkHelper(biolink_version=biolink_version)
-    return {predicate:len(biolink_helper.get_ancestors(predicate, include_mixins=False)) for predicate in predicate_list}
 
+## ── Knowledge Graph and graph-tool helpers ──────────────────────────────
+class KnowledgeGraph:
+    """Pruned knowledge graph backed by adjacency list and page-rank scores."""
+
+    def __init__(self, data_dir, bandwidth=3000, logger=None):
+        self.bandwidth = bandwidth
+        self.entity2id, self.id2entity = load_index(os.path.join(data_dir, 'entity2freq.txt'))
+        self.num_entities = len(self.entity2id)
+        if logger:
+            logger.info(f'Total {self.num_entities} entities loaded')
+        self.relation2id, self.id2relation = load_index(os.path.join(data_dir, 'relation2freq.txt'))
+        if logger:
+            logger.info(f'Total {len(self.relation2id)} relations loaded')
+
+        with open(os.path.join(data_dir, 'adj_list.pkl'), 'rb') as f:
+            self.adj_list = pickle.load(f)
+
+        self.page_rank_scores = self._load_page_rank_scores(os.path.join(data_dir, 'kg.pgrk'))
+        self.graph = {src: self._get_action_space(src) for src in range(self.num_entities)}
+
+    def _load_page_rank_scores(self, input_path):
+        scores = collections.defaultdict(float)
+        with open(input_path) as f:
+            for line in f:
+                entity, score = line.strip().split('\t')
+                scores[self.entity2id[entity.strip()]] = float(score)
+        return scores
+
+    def _get_action_space(self, source):
+        if source not in self.adj_list:
+            return []
+        action_space = [
+            (relation, target)
+            for relation, targets in self.adj_list[source].items()
+            for target in targets
+        ]
+        if len(action_space) + 1 >= self.bandwidth:
+            action_space.sort(key=lambda x: self.page_rank_scores[x[1]], reverse=True)
+            action_space = action_space[:self.bandwidth]
+        return action_space
+
+    def resolve_curie(self, curie):
+        """Resolve a CURIE to (canonical_curie, entity_id) via the Node Norm API."""
+        canonical = get_canonical_curie(curie)
+        if canonical is None:
+            return (curie, None)
+        return (canonical, self.entity2id.get(canonical))
+
+
+def build_graph_tool_graph(kg_graph):
+    """Build a graph-tool Graph from a KnowledgeGraph action-space dict."""
+    G = gt.Graph()
+    edge_relations = {}
+    for source, actions in kg_graph.items():
+        for relation, target in actions:
+            edge_relations.setdefault((source, target), set()).add(relation)
+    etype = G.new_edge_property('object')
+    for (source, target), relations in edge_relations.items():
+        e = G.add_edge(source, target)
+        etype[e] = relations
+    G.edge_properties['edge_type'] = etype
+    return G
+
+
+def get_depth_of_predicate(predicate_list, biolink_version='4.2.0'):
+    bh = get_biolink_helper(biolink_version)
+    return {predicate: len(bh.get_ancestors(predicate, include_mixins=False)) for predicate in predicate_list}
+
+
+## ── Embedding / model loading helpers ────────────────────────────────────
 def hist_to_vocab(_dict):
     return sorted(sorted(_dict.items(), key=lambda x: x[0]), key=lambda x: x[1], reverse=True)
 
+
 def entity_load_embed(args):
-    embedding_folder = os.path.join(args.data_dir, 'kg_init_embeddings')
-    embeds = np.load(os.path.join(embedding_folder,'entity_embeddings.npy'))
-    return torch.tensor(embeds).type(torch.float)
+    path = os.path.join(args.data_dir, 'kg_init_embeddings', 'entity_embeddings.npy')
+    return torch.tensor(np.load(path)).float()
+
 
 def get_graphsage_embedding(args):
-    embedding_file_folder = os.path.dirname(args.pretrain_model_path)
-    with open(os.path.join(embedding_file_folder, 'entity_embeddings.npy'),'rb') as infile:
-        entity_embeddings = np.load(infile)
-    return torch.tensor(entity_embeddings).type(torch.float)
+    path = os.path.join(os.path.dirname(args.pretrain_model_path), 'entity_embeddings.npy')
+    return torch.tensor(np.load(path)).float()
+
 
 def relation_load_embed(args):
-    embedding_folder = os.path.join(args.data_dir, 'kg_init_embeddings')
-    embeds = np.load(os.path.join(embedding_folder,'relation_embeddings.npy'))
-    return torch.tensor(embeds).type(torch.float)
+    path = os.path.join(args.data_dir, 'kg_init_embeddings', 'relation_embeddings.npy')
+    return torch.tensor(np.load(path)).float()
+
 
 def entity_type_load_embed(args):
-    embedding_folder = os.path.join(args.data_dir, 'kg_init_embeddings')
-    embeds = np.load(os.path.join(embedding_folder,'entity_type_embeddings.npy'))
-    return torch.tensor(embeds).type(torch.float)
+    path = os.path.join(args.data_dir, 'kg_init_embeddings', 'entity_type_embeddings.npy')
+    return torch.tensor(np.load(path)).float()
+
 
 def batch_lookup(M, idx, vector_output=True):
-    batch_size, w = M.size()
+    batch_size, _ = M.size()
     batch_size2, sample_size = idx.size()
-    assert(batch_size == batch_size2)
-
+    assert batch_size == batch_size2
     if sample_size == 1 and vector_output:
-        samples = torch.gather(M, 1, idx).view(-1)
-    else:
-        samples = torch.gather(M, 1, idx)
-    return samples
+        return torch.gather(M, 1, idx).view(-1)
+    return torch.gather(M, 1, idx)
+
 
 def empty_gpu_cache(args):
     with torch.cuda.device(f'cuda:{args.gpu}'):
         torch.cuda.empty_cache()
 
+
 def ones_var_cuda(s, args, requires_grad=False, use_gpu=True):
-    if use_gpu is True:
-        return Variable(torch.ones(s), requires_grad=requires_grad).to(args.device)
-    else:
-        return Variable(torch.ones(s), requires_grad=requires_grad).long()
+    v = Variable(torch.ones(s), requires_grad=requires_grad)
+    return v.to(args.device) if use_gpu else v.long()
+
 
 def zeros_var_cuda(s, args, requires_grad=False, use_gpu=True):
-    if use_gpu is True:
-        return Variable(torch.zeros(s), requires_grad=requires_grad).to(args.device)
-    else:
-        return Variable(torch.zeros(s), requires_grad=requires_grad).long()
+    v = Variable(torch.zeros(s), requires_grad=requires_grad)
+    return v.to(args.device) if use_gpu else v.long()
+
 
 def int_var_cuda(x, args, requires_grad=False, use_gpu=True):
-    if use_gpu is True:
-        return Variable(x, requires_grad=requires_grad).long().to(args.device)
-    else:
-        return Variable(x, requires_grad=requires_grad).long()
+    v = Variable(x, requires_grad=requires_grad).long()
+    return v.to(args.device) if use_gpu else v
+
 
 def var_cuda(x, args, requires_grad=False, use_gpu=True):
-    if use_gpu is True:
-        return Variable(x, requires_grad=requires_grad).to(args.device)
-    else:
-        return Variable(x, requires_grad=requires_grad).long()
+    v = Variable(x, requires_grad=requires_grad)
+    return v.to(args.device) if use_gpu else v.long()
 
 def pad_and_cat(a, padding_value, padding_dim=1):
     max_dim_size = max([x.size()[padding_dim] for x in a])
@@ -257,6 +385,7 @@ def pad_and_cat(a, padding_value, padding_dim=1):
 def rearrange_vector_list(l, offset):
     for i, v in enumerate(l):
         l[i] = v[offset]
+
 
 def tile_along_beam(v, beam_size, dim=0):
     """
@@ -277,26 +406,15 @@ def tile_along_beam(v, beam_size, dim=0):
     return v.view(new_size)
 
 
-# Flatten and pack nested lists using recursion
 def flatten(l):
-    flatten_l = []
+    """Flatten nested lists/tuples into a single list."""
+    flat = []
     for c in l:
-        if type(c) is list or type(c) is tuple:
-            flatten_l.extend(flatten(c))
+        if isinstance(c, (list, tuple)):
+            flat.extend(flatten(c))
         else:
-            flatten_l.append(c)
-    return flatten_l
-
-
-def pack(l, a):
-    """
-    Pack a flattened list l into the structure of the nested list a.
-    """
-    nested_l = []
-    for c in a:
-        if type(c) is not list:
-            nested_l.insert(l[0], 0)
-            l.pop(0)
+            flat.append(c)
+    return flat
 
 
 def unique_max(unique_x, x, values, args, marker_2D=None, use_gpu=True):
@@ -323,6 +441,8 @@ def set_random_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+
+## ── Logging ──────────────────────────────────────────────────────────────
 def get_logger(logname):
     logger = logging.getLogger(logname)
     logger.setLevel(logging.INFO)
@@ -335,6 +455,8 @@ def get_logger(logname):
     logger.addHandler(fh)
     return logger
 
+
+## ── Triple / metric helpers ──────────────────────────────────────────────
 def load_triples(data_path, entity_index_path, relation_index_path, group_examples_by_query=False, seen_entities=None, verbose=False):
     """
     Convert triples stored on disc into indices.
@@ -376,181 +498,205 @@ def load_triples(data_path, entity_index_path, relation_index_path, group_exampl
     return triples
 
 def calculate_f1score(preds, labels, average='binary'):
-    preds = np.array(preds)
-    y_pred_tags = np.argmax(preds, axis=1)
-    abels = np.array(labels)
-    f1score = f1_score(labels, y_pred_tags, average=average)
-    return f1score
- 
+    y_pred_tags = np.argmax(np.array(preds), axis=1)
+    return f1_score(np.array(labels), y_pred_tags, average=average)
+
+
 def calculate_acc(preds, labels):
-    preds = np.array(preds)
-    y_pred_tags = np.argmax(preds, axis=1)
-    labels = np.array(labels)
-    acc = (y_pred_tags == labels).astype(float).mean()
-    return acc
+    y_pred_tags = np.argmax(np.array(preds), axis=1)
+    return (y_pred_tags == np.array(labels)).astype(float).mean()
 
-def calculate_mrr(drug_disease_pairs, random_pairs, N):
-    '''
-    This function is used to calculate Mean Reciprocal Rank (MRR)
-    reference paper: Knowledge Graph Embedding for Link Prediction: A Comparative Analysis
-    '''
-    
-    ## only use tp pairs
-    drug_disease_pairs = drug_disease_pairs.loc[drug_disease_pairs['y']==1,:].reset_index(drop=True)
-    
-    Q_n = len(drug_disease_pairs)
-    score = 0
-    for index in range(Q_n):
-        query_drug = drug_disease_pairs['source'][index]
-        query_disease = drug_disease_pairs['target'][index]
-        this_query_score = drug_disease_pairs['prob'][index]
-        all_random_probs_for_this_query = list(random_pairs.loc[random_pairs['source'].isin([query_drug]),'prob'])
-        all_random_probs_for_this_query += list(random_pairs.loc[random_pairs['target'].isin([query_disease]),'prob'])
-        all_random_probs_for_this_query = all_random_probs_for_this_query[:N]
-        all_in_list = [this_query_score] + all_random_probs_for_this_query
-        rank = list(torch.tensor(all_in_list).sort(descending=True).indices.numpy()).index(0)+1
-        score += 1/rank
-        
-    final_score = score/Q_n
-    
-    return final_score
+## ── Full-matrix evaluation metrics ───────────────────────────────────────
 
-def calculate_hitk(drug_disease_pairs, random_pairs, N, k=1):
-    '''
-    This function is used to calculate Hits@K (H@K)
-    reference paper: Knowledge Graph Embedding for Link Prediction: A Comparative Analysis
-    '''
-    
-    ## only use tp pairs
-    drug_disease_pairs = drug_disease_pairs.loc[drug_disease_pairs['y']==1,:].reset_index(drop=True)
-    
-    Q_n = len(drug_disease_pairs)
-    count = 0
-    for index in range(Q_n):
-        query_drug = drug_disease_pairs['source'][index]
-        query_disease = drug_disease_pairs['target'][index]
-        this_query_score = drug_disease_pairs['prob'][index]
-        all_random_probs_for_this_query = list(random_pairs.loc[random_pairs['source'].isin([query_drug]),'prob'])
-        all_random_probs_for_this_query += list(random_pairs.loc[random_pairs['target'].isin([query_disease]),'prob'])
-        all_random_probs_for_this_query = all_random_probs_for_this_query[:N]
-        all_in_list = [this_query_score] + all_random_probs_for_this_query
-        rank = list(torch.tensor(all_in_list).sort(descending=True).indices.numpy()).index(0)+1
-        if rank <= k:
-            count += 1
-        
-    final_score = count/Q_n
-    
-    return final_score
+def give_recall_at_n(matrix, n_lst, bool_test_col='is_known_positive',
+                     score_col='treat score', perform_sort=True,
+                     out_of_matrix_mode=False):
+    """Proportion of ground-truth test pairs that appear in the top-n of the matrix."""
+    N = matrix.filter(pl.col(bool_test_col)).height
+    if N == 0:
+        return [0] * len(n_lst)
+    if out_of_matrix_mode:
+        matrix = matrix.filter(pl.col('in_matrix') | pl.col(bool_test_col))
+    if perform_sort or out_of_matrix_mode:
+        matrix = matrix.sort(by=score_col, descending=True)
+    ranks = matrix.with_row_index('index').filter(pl.col(bool_test_col)).select(pl.col('index')).to_series() + 1
+    return [(ranks <= n).sum() / N for n in n_lst]
 
 
-def calculate_rank(data_pos_df, all_drug_ids, all_disease_ids, entity_embeddings_dict, all_tp_pairs_dict, fitModel, mode='both'):
-    res_dict = dict()
-    total = data_pos_df.shape[0]
-    for index, (source, target) in enumerate(data_pos_df[['source','target']].to_numpy()):
-        print(f"calculating rank {index+1}/{total}", flush=True)
-        this_pair = source + '_' + target
-        X_drug = np.vstack([np.hstack([entity_embeddings_dict[drug_id],entity_embeddings_dict[target]]) for drug_id in all_drug_ids])
-        X_disease = np.vstack([np.hstack([entity_embeddings_dict[source],entity_embeddings_dict[disease_id]]) for disease_id in all_disease_ids])
-        all_X = np.concatenate([X_drug,X_disease],axis=0)
-        pred_probs = fitModel.predict_proba(all_X)
-        temp_df = pd.concat([pd.DataFrame(zip(all_drug_ids,[target]*len(all_drug_ids))),pd.DataFrame(zip([source]*len(all_disease_ids),all_disease_ids))]).reset_index(drop=True)
-        temp_df[2] = temp_df[0] + '_' + temp_df[1]
-        temp_df[3] = pred_probs[:,1]
-        this_row = temp_df.loc[temp_df[2]==this_pair,:].reset_index(drop=True).iloc[[0]]
-        temp_df = temp_df.loc[temp_df[2]!=this_pair,:].reset_index(drop=True)
-        if mode == 'both':
-            ## without filter
-            # (1) for drug
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[1] == target,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            w_drug_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (2) for disease
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[0] == source,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            w_disease_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (3) for both 
-            temp_df_1 = pd.concat([temp_df,this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            w_both_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            ## filter 
-            temp_df = temp_df.loc[~temp_df[2].isin(list(all_tp_pairs_dict.keys())),:].reset_index(drop=True)
-            # (1) for drug
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[1] == target,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            drug_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (2) for disease
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[0] == source,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            disease_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (3) for both 
-            temp_df_1 = pd.concat([temp_df,this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            both_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            res_dict[(source, target)] = [(w_drug_rank, w_disease_rank, w_both_rank), (drug_rank, disease_rank, both_rank)]
-
-        elif mode == 'filter':
-            ## filter 
-            temp_df = temp_df.loc[~temp_df[2].isin(list(all_tp_pairs_dict.keys())),:].reset_index(drop=True)
-            # (1) for drug
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[1] == target,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            drug_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (2) for disease
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[0] == source,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            disease_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (3) for both 
-            temp_df_1 = pd.concat([temp_df,this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            both_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            res_dict[(source, target)] = [(None, None, None), (drug_rank, disease_rank, both_rank)] 
-        else:
-            ## without filter
-            # (1) for drug
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[1] == target,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            w_drug_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (2) for disease
-            temp_df_1 = pd.concat([temp_df.loc[temp_df[0] == source,:],this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            w_disease_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            # (3) for both 
-            temp_df_1 = pd.concat([temp_df,this_row]).reset_index(drop=True)
-            temp_df_1 = temp_df_1.sort_values(by=3,ascending=False).reset_index(drop=True)
-            w_both_rank = (temp_df_1.loc[temp_df_1[2] == this_pair,:].index[0]+1,temp_df_1.shape[0])
-            res_dict[(source, target)] = [(w_drug_rank, w_disease_rank, w_both_rank), (None, None, None)]
-    return res_dict
+def give_hit_at_k(matrix, k_max, bool_test_col='is_known_positive',
+                  score_col='treat score'):
+    """Hit@k: proportion of test positives whose disease-specific rank <= k."""
+    test_diseases = (
+        matrix.group_by('target')
+        .agg(pl.col(bool_test_col).sum().alias('n_pos'))
+        .filter(pl.col('n_pos') > 0)
+        .select('target').to_series().to_list()
+    )
+    matrix = matrix.filter(pl.col('target').is_in(test_diseases))
+    matrix = matrix.with_columns(
+        disease_rank=pl.col(score_col).rank(descending=True, method='random').over('target')
+    )
+    matrix = (
+        matrix.filter(pl.col(bool_test_col))
+        .with_columns(
+            disease_rank_among_positives=pl.col(score_col).rank(descending=True, method='dense').over('target')
+        )
+        .with_columns(
+            disease_rank_against_negatives=(
+                pl.col('disease_rank').cast(pl.Int64) - pl.col('disease_rank_among_positives').cast(pl.Int64) + 1
+            ).cast(pl.UInt64)
+        )
+    )
+    ranks_agg = (
+        matrix.filter(pl.col(bool_test_col))
+        .group_by('disease_rank_against_negatives').len()
+        .sort('disease_rank_against_negatives')
+        .with_columns(pl.col('len').cum_sum().alias('cumulative_len'))
+    )
+    n_test = matrix.filter(pl.col(bool_test_col)).height
+    df_hit = pl.DataFrame({
+        'k': ranks_agg['disease_rank_against_negatives'].cast(pl.UInt32),
+        'hit_at_k': ranks_agg['cumulative_len'] / n_test,
+    })
+    all_k = pl.DataFrame({'k': list(range(1, k_max + 1))}, schema={'k': pl.UInt32})
+    df_hit = (
+        all_k.join(df_hit, on='k', how='left')
+        .with_columns(pl.col('hit_at_k').forward_fill().fill_null(0.0))
+    )
+    return df_hit
 
 
-def plot_cutoff(dfs, plot_title, outfile_path, class_label=[1,0,2], title_post = ["TP pairs", "TN pairs", "Random pairs"]):
+def give_disease_specific_mrr(matrix, bool_test_col='is_known_positive',
+                              score_col='treat score'):
+    """Mean Reciprocal Rank across disease-specific rankings of test positives."""
+    test_diseases = (
+        matrix.group_by('target')
+        .agg(pl.col(bool_test_col).sum().alias('n_pos'))
+        .filter(pl.col('n_pos') > 0)
+        .select('target').to_series().to_list()
+    )
+    matrix = matrix.filter(pl.col('target').is_in(test_diseases))
+    matrix = matrix.with_columns(
+        disease_rank=pl.col(score_col).rank(descending=True, method='random').over('target')
+    )
+    matrix = (
+        matrix.filter(pl.col(bool_test_col))
+        .with_columns(
+            disease_rank_among_positives=pl.col(score_col).rank(descending=True, method='dense').over('target')
+        )
+        .with_columns(
+            disease_rank_against_negatives=(
+                pl.col('disease_rank').cast(pl.Int64) - pl.col('disease_rank_among_positives').cast(pl.Int64) + 1
+            ).cast(pl.UInt64)
+        )
+    )
+    return (1 / matrix['disease_rank_against_negatives']).mean()
 
-    color = ["xkcd:dark magenta","xkcd:dark turquoise","xkcd:azure","xkcd:purple blue","xkcd:scarlet",
-        "xkcd:orchid", "xkcd:pumpkin", "xkcd:gold", "xkcd:peach", "xkcd:neon green", "xkcd:grey blue"]
 
-    cutoff_n_list = []
+def give_precision_recall_curve(matrix, bool_test_col_pos='is_known_positive',
+                                bool_test_col_neg='is_known_negative',
+                                score_col='treat score'):
+    """Precision-recall curve over known positive and negative test pairs."""
+    gt = matrix.filter(pl.col(bool_test_col_pos) | pl.col(bool_test_col_neg)).select(bool_test_col_pos, score_col)
+    prec, rec, _ = precision_recall_curve(gt[bool_test_col_pos], gt[score_col])
+    return prec, rec
 
-    for df in dfs:
-        cutoffs = [x/100 for x in range(101)]
-        cutoff_n_list += [[df["treat_prob"][df["treat_prob"] >= cutoff].count()/len(df) for cutoff in cutoffs]]
 
-    tp_to_tn_diff = [cutoff_n_list[class_label.index(1)][index] - cutoff_n_list[class_label.index(0)][index] for index in range(101)]
-    tp_to_random_diff = [cutoff_n_list[class_label.index(1)][index] - cutoff_n_list[class_label.index(2)][index] for index in range(101)]
-    min_val = [min(tp_to_tn_diff[index],tp_to_random_diff[index]) for index in range(101)]
+## ── Evaluation plots ─────────────────────────────────────────────────────
 
-    fig, ax1 = plt.subplots()
-    for index, label in enumerate(class_label):
-        ax1.plot(cutoffs, cutoff_n_list[class_label.index(label)], color=color[index], label=title_post[index])
-    ax1.set_ylabel("Rate of Postitive Predictions",fontsize=12)
-    ax1.set_xlabel("Probability Cutoff",fontsize=12)
-    ax1.legend(loc="upper right")
-    ax2=ax1.twinx()
-    ax2.plot(cutoffs, min_val, color=color[index+1], ls = ':')
-    ax2.set_ylabel("Min RPP Difference",color=color[index+1],fontsize=12)
-    plt.title(plot_title)
-    plt.savefig(outfile_path)
+def plot_av_ranking_metrics(matrices_all, model_names,
+                            bool_test_col='is_known_positive',
+                            score_col='treat score', perform_sort=True,
+                            n_min=10, n_max=100000, n_steps=1000, k_max=100,
+                            sup_title=None, force_full_y_axis=True,
+                            save_path=None, **_kwargs):
+    """Plot Recall@n and Hit@k for one or more models (single-matrix mode)."""
+    n_lst = [int(n) for n in np.linspace(n_min, n_max, n_steps)]
+    matrix_length = min(len(m) for m in matrices_all)
+    n_drugs = min(len(m['source'].unique()) for m in matrices_all)
+
+    _, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
+
+    for name, matrix in zip(model_names, matrices_all):
+        ax1.plot(n_lst, give_recall_at_n(matrix, n_lst, bool_test_col=bool_test_col,
+                                         score_col=score_col, perform_sort=perform_sort), label=name)
+    ax1.plot([0, matrix_length], [0, 1], 'k--', label='Random classifier', alpha=0.5)
+    ax1.legend(); ax1.set_xlabel('n'); ax1.set_ylabel('Recall@n')
+    ax1.set_xlim(0, n_max)
+    if force_full_y_axis:
+        ax1.set_ylim(0, 1)
+    ax1.set_title('Recall@n vs n'); ax1.grid(True)
+
+    for name, matrix in zip(model_names, matrices_all):
+        hk = give_hit_at_k(matrix, k_max, bool_test_col=bool_test_col, score_col=score_col)
+        ax2.plot(hk['k'], hk['hit_at_k'], label=name)
+    ax2.plot([0, n_drugs], [0, 1], 'k--', label='Random classifier', alpha=0.5)
+    ax2.legend(); ax2.set_xlabel('k'); ax2.set_ylabel('Hit@k')
+    ax2.set_xlim(0, k_max)
+    if force_full_y_axis:
+        ax2.set_ylim(0, 1)
+    ax2.set_title('Disease-specific Hit@k vs k'); ax2.grid(True)
+
+    if sup_title:
+        plt.suptitle(sup_title)
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
     plt.close()
 
 
+def plot_negative_metrics(matrices_all, model_names,
+                          bool_pos_col='is_known_positive',
+                          bool_neg_col='is_known_negative',
+                          score_col='treat score', perform_sort=True,
+                          n_min=10, n_max=None, n_steps=1000, k_max=None,
+                          sup_title=None, force_full_y_axis=False,
+                          save_path=None, **_kwargs):
+    """Plot Precision-Recall curve, negative Recall@n, and negative Hit@k."""
+    matrix_length = min(len(m) for m in matrices_all)
+    n_drugs = min(len(m['source'].unique()) for m in matrices_all)
+    if n_max is None:
+        n_max = matrix_length
+    if k_max is None:
+        k_max = n_drugs
+    n_lst = [int(n) for n in np.linspace(n_min, n_max, n_steps)]
+
+    _, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 15))
+
+    for name, matrix in zip(model_names, matrices_all):
+        prec, rec = give_precision_recall_curve(matrix, bool_pos_col, bool_neg_col, score_col)
+        ax1.plot(rec, prec, label=name)
+    ax1.legend(); ax1.set_xlabel('Recall'); ax1.set_ylabel('Precision')
+    ax1.set_title('Precision-Recall curve'); ax1.grid(True)
+
+    for name, matrix in zip(model_names, matrices_all):
+        ax2.plot(n_lst, give_recall_at_n(matrix, n_lst, bool_test_col=bool_neg_col,
+                                         score_col=score_col, perform_sort=perform_sort))
+    ax2.plot([0, n_max], [0, n_max / matrix_length], 'k--', label='Random classifier', alpha=0.5)
+    ax2.set_xlabel('n'); ax2.set_ylabel('Recall@n (negatives)')
+    ax2.set_title('Recall@n vs n (negatives - lower is better)')
+    if force_full_y_axis:
+        ax2.set_ylim(0, 1)
+    ax2.legend(); ax2.grid(True)
+
+    for name, matrix in zip(model_names, matrices_all):
+        hk = give_hit_at_k(matrix, k_max, bool_test_col=bool_neg_col, score_col=score_col)
+        ax3.plot(hk['k'], hk['hit_at_k'], label=name)
+    ax3.plot([0, k_max], [0, k_max / n_drugs], 'k--', label='Random classifier', alpha=0.5)
+    ax3.set_xlabel('k'); ax3.set_ylabel('Hit@k (negatives)')
+    ax3.set_title('Disease-specific Hit@k vs k (negatives - lower is better)')
+    if force_full_y_axis:
+        ax3.set_ylim(0, 1)
+    ax3.legend(); ax3.grid(True)
+
+    if sup_title:
+        plt.suptitle(sup_title)
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path)
+    plt.close()
+
+## ── Beam search and evaluation ───────────────────────────────────────────
 def beam_search(args, source_ids, env, model):
     """
     Beam search from source.
@@ -749,21 +895,18 @@ def evaluate(args, drug_disease_dict, env, model, all_drug_disease_dict, save_pa
             return {'paths': [all_paths_r,all_paths_e], 'prob_scores': all_prob_scores, 'hit_pairs': hit_disease_target_pairs, 'recall': avg_recall, 'precision': avg_precision, 'hr': avg_hit}
         else:
             return None
-        
+
+
+## ── Device, model loading, and CURIE helpers ─────────────────────────────
 def check_device(logger, use_gpu: bool = False, gpu: int = 0):
     if use_gpu and torch.cuda.is_available():
-        use_gpu = True
         device = torch.device(f'cuda:{gpu}')
         torch.cuda.set_device(gpu)
-    elif use_gpu:
-        logger.info('No GPU is detected in this computer. Use CPU instead.')
-        use_gpu = False
-        device = 'cpu'
-    else:
-        use_gpu = False
-        device = 'cpu'
+        return [True, device]
+    if use_gpu:
+        logger.info('No GPU detected. Falling back to CPU.')
+    return [False, torch.device('cpu')]
 
-    return [use_gpu, device]
 
 def load_graphsage_unsupervised_embeddings(data_path: str):
     file_path = os.path.join(data_path, 'graphsage_output', 'unsuprvised_graphsage_entity_embeddings.pkl')
@@ -771,80 +914,38 @@ def load_graphsage_unsupervised_embeddings(data_path: str):
         entity_embeddings_dict = pickle.load(infile)
     return entity_embeddings_dict
 
+
 def load_ML_model(model_path: str):
-    file_path = os.path.join(model_path,'RF_model_3class','RF_model.pt')
-    fitModel = joblib.load(file_path)
-    return fitModel
+    file_path = os.path.join(model_path, 'xgboost_model_3class', 'xgboost_model.pt')
+    return joblib.load(file_path)
 
 def load_gt_kg(kg):
-    G = gt.Graph()
-    kg_tmp = dict()
-    for source in kg.graph:
-        for (relation, target) in kg.graph[source]:
-            if (source, target) not in kg_tmp:
-                kg_tmp[(source, target)] = set([relation])
-            else:
-                kg_tmp[(source, target)].update(set([relation]))
-    etype = G.new_edge_property('object')
-    for (source, target) in kg_tmp:
-        e = G.add_edge(source,target)
-        etype[e] = kg_tmp[(source, target)]
-    # G.edge_properties['edge_type'] = etype
-    return G, etype
+    """Build a graph-tool Graph from a KG object. Returns (Graph, edge_type_property)."""
+    G = build_graph_tool_graph(kg.graph)
+    return G, G.edge_properties['edge_type']
+
 
 def check_curie_available(logger, curie: str, available_curies_dict: dict):
-    normalized_result = nodesynonymizer.get_canonical_curies(curie)[curie]
-    if normalized_result:
-        curie = normalized_result['preferred_curie']
-    else:
-        curie = curie
-    
+    info = get_node_norm_info(curie)
+    if info:
+        curie = info['preferred_curie']
     if curie in available_curies_dict:
         return [True, curie]
-    else:
-        return [False, None]
-    
+    return [False, None]
+
+
 def check_curie(curie: str, entity2id):
     if curie is None:
         return (None, None)
-    res = nodesynonymizer.get_canonical_curies(curie)[curie]
-    if res is not None:
-        preferred_curie = nodesynonymizer.get_canonical_curies(curie)[curie]['preferred_curie']
-    else:
-        preferred_curie = None
-    if preferred_curie in entity2id:
+    info = get_node_norm_info(curie)
+    preferred_curie = info['preferred_curie'] if info else None
+    if preferred_curie and preferred_curie in entity2id:
         return (preferred_curie, entity2id[preferred_curie])
-    else:
-        return (preferred_curie, None)
-    
+    return (preferred_curie, None)
+
+
 def id_to_name(curie: str):
     if curie is None:
         return str(None)
-    if curie is not None:
-        try:
-            preferred_curie_name = nodesynonymizer.get_canonical_curies(curie)[curie]['preferred_name']
-        except:
-            preferred_curie_name = None
-    else:
-        preferred_curie_name = None
-    return str(preferred_curie_name)
-
-def calculate_ngd(concept_pubmed_ids):
-
-    if concept_pubmed_ids[0] is None or concept_pubmed_ids[1] is None:
-        return None
-    concept_pubmed_ids = (eval(concept_pubmed_ids[0]),eval(concept_pubmed_ids[1]))
-
-    marginal_counts = list(map(lambda pmid_list: len(set(pmid_list)), concept_pubmed_ids))
-    joint_count = len(set(concept_pubmed_ids[0]).intersection(set(concept_pubmed_ids[1])))
-
-    if 0 in marginal_counts or 0. in marginal_counts:
-        return None
-    elif joint_count == 0 or joint_count == 0.:
-        return None
-    else:
-        try:
-            return (max([math.log(count) for count in marginal_counts]) - math.log(joint_count)) / \
-                (math.log(NGD_normalizer) - min([math.log(count) for count in marginal_counts]))
-        except ValueError:
-            return None
+    info = get_node_norm_info(curie)
+    return str(info['preferred_name'] if info else None)

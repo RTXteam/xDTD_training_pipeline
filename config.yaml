@@ -1,34 +1,31 @@
-RTXINFO:
-  CONFIG_SERVER: "araxconfig@araxconfig.rtx.ai"
-  GITHUB_LINK: " https://raw.githubusercontent.com/RTXteam/RTX/kg2.10.0c"
-  SECRET_CONFIGFILE: "config_secrets.json"
-  DB_CONFIGFILE: "config_dbs.json"
-
 DRUGMECHDBINFO:
   LINK: "https://raw.githubusercontent.com/SuLab/DrugMechDB/main"
   DRUGMECHDB_PATH: "indication_paths.yaml"
 
-KG2INFO:
-  BIOLINK_VERSION: "4.2.0"
+TRANSLATOR_KG:
+  DOWNLOAD_URL: "https://kgx-storage.rtx.ai/releases/translator_kg/latest/translator_kg.tar.zst"
+  NODES_JSONL: "translator_kg/nodes.jsonl"
+  EDGES_JSONL: "translator_kg/edges.jsonl"
+
+GROUND_TRUTH_PAIRS:
+  DIR: "ground_truth_pairs"
+  BASE_URL: "https://github.com/everycure-org/matrix-indication-list/releases/download/v1.4.1"
+  INDICATION_FILE: "indicationList.xlsx"
+  CONTRAINDICATION_FILE: "contraindicationList.xlsx"
+
+DRUG_DISEASE_LIST:
+  DIR: "drug_disease_list"
+  DRUG_DATASET: "everycure/drug-list"
+  DRUG_FILE: "matrix-drug-list.tsv"
+  DISEASE_DATASET: "everycure/disease-list"
+  DISEASE_FILE: "matrix-disease-list.tsv"
+
+KGINFO:
+  BIOLINK_VERSION: "4.3.6"
   PUBLICATION_CUTOFF: 10
-  NGD_CUTOFF: 0.6
 
-SYSTEMINFO:
-  NUM_CPU: 200
-
-TRAINING_DATA:
-  TP:
-    MYCHEM: raw_training_data/mychem_tp.txt
-    SEMMED: raw_training_data/semmed_tp.txt
-    NDF: raw_training_data/ndf_tp.txt
-    REPODB: raw_training_data/repoDB_tp.txt
-  TN:
-    MYCHEM: raw_training_data/mychem_tn.txt
-    SEMMED: raw_training_data/semmed_tn.txt
-    NDF: raw_training_data/ndf_tn.txt
-    REPODB: raw_training_data/repoDB_tn.txt
+EXTERNAL_DATA:
   DRUGBANK_XML: drugbank.xml
-  MOLEPRO_API_LINK: https://molepro-trapi.transltr.io/molepro/trapi/v1.5
 
 MODELINFO:
   PARAMS:
@@ -39,12 +36,17 @@ MODELINFO:
     GPU: 1
     STATE_HISTORY: 2
     LEARNING_RATE: 0.0005
+    EXPERT_PATH_PROCESS: 180
+    EXPERT_PATH_BATCH_SIZE: 500
+    OPTUNA_N_TRIALS: 25
+    OPTUNA_N_STARTUP_TRIALS: 5
+    EARLY_STOPPING_ROUNDS: 30
     
 PARALLEL_PRECOMPUTE:
-  K: 25
+  K: 100
   N_drugs: 150
   N_paths: 50
   BATCH_SIZE: 200
 
 DATABASE:
-  DATABASE_NAME: 'ExplainableDTD.db'
+  DATABASE_NAME: 'ExplainableDTD_v1.0-tier0-20260408-all_with_paths.db'

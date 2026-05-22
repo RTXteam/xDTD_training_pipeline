@@ -2,9 +2,7 @@
 import os, sys
 import graph_tool.all as gt
 import argparse
-import pickle
-import collections
-import pandas as pd
+import polars as pl
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -12,164 +10,128 @@ ROOTindex = pathlist.index("xDTD_training_pipeline")
 ROOTPath = os.path.sep.join([*pathlist[:(ROOTindex + 1)]])
 sys.path.append(os.path.join(ROOTPath, 'scripts'))
 import utils
-from node_synonymizer import NodeSynonymizer
-synonymizer = NodeSynonymizer()
-
-class knowledge_graph:
-
-    def __init__(self, data_dir, bandwidth=3000):
-        # Load data
-        self.bandwidth = bandwidth
-        self.entity2id, self.id2entity = utils.load_index(os.path.join(data_dir, 'entity2freq.txt'))
-        logger.info('Total {} entities loaded'.format(len(self.entity2id)))
-        self.num_entities = len(self.entity2id)
-        self.relation2id, self.id2relation = utils.load_index(os.path.join(data_dir, 'relation2freq.txt'))
-        logger.info('Total {} relations loaded'.format(len(self.relation2id)))
-
-        # Load graph structures
-        adj_list_path = os.path.join(data_dir, 'adj_list.pkl')
-        with open(adj_list_path, 'rb') as f:
-            self.adj_list = pickle.load(f)
-
-        self.page_rank_scores = self.load_page_rank_scores(os.path.join(data_dir, 'kg.pgrk'))
-
-        self.graph = {source:self.get_action_space(source) for source in range(self.num_entities)}
-
-    def load_page_rank_scores(self, input_path):
-        pgrk_scores = collections.defaultdict(float)
-        with open(input_path) as f:
-            for line in f:
-                entity, score = line.strip().split('\t')
-                entity_id = self.entity2id[entity.strip()]
-                score = float(score)
-                pgrk_scores[entity_id] = score
-        return pgrk_scores
+from utils import KnowledgeGraph, build_graph_tool_graph
 
 
-    def get_action_space(self, source):
-        action_space = []
-        if source in self.adj_list:
-            for relation in self.adj_list[source]:
-                targets = self.adj_list[source][relation]
-                for target in targets:
-                    action_space.append((relation, target))
-            if len(action_space) + 1 >= self.bandwidth:
-                # Base graph pruning
-                sorted_action_space = sorted(action_space, key=lambda x: self.page_rank_scores[x[1]], reverse=True)
-                action_space = sorted_action_space[:self.bandwidth]
-        return action_space
-
-def convert_to_canonicalized_curie(curie):
-    if not synonymizer.get_canonical_curies(curie)[curie]:
-        return None
-    else:
-        return synonymizer.get_canonical_curies(curie)[curie]['preferred_curie']
-
-def check_curie(curie):
-    if curie is None:
-        return (None, None)
-    res = synonymizer.get_canonical_curies(curie)[curie]
-    if res is not None:
-        preferred_curie = synonymizer.get_canonical_curies(curie)[curie]['preferred_curie']
-    else:
-        preferred_curie = None
-    if preferred_curie in kg.entity2id:
-        return (preferred_curie, kg.entity2id[preferred_curie])
-    else:
-        return (preferred_curie, None)
-
-def check_direct_connect(pair):
-    if check_curie(pair[0])[1] is not None and check_curie(pair[1])[1] is not None:
-        return len([path for path in gt.all_paths(G, check_curie(pair[0])[1], check_curie(pair[1])[1], cutoff=1)]) > 0
-    else:
+def is_directly_connected(source, target):
+    """True if source and target share a direct edge in G."""
+    _, src_id = kg.resolve_curie(source)
+    _, tgt_id = kg.resolve_curie(target)
+    if src_id is None or tgt_id is None:
         return False
+    return any(True for _ in gt.all_paths(G, src_id, tgt_id, cutoff=1))
 
-def check_connect(params):
-    source, target, cutoff = params
-    print([source, target], flush=True)
-    if check_curie(source)[1] is not None and check_curie(target)[1] is not None:
-        for path in gt.all_paths(G, check_curie(source)[1], check_curie(target)[1], cutoff=cutoff):
-            return True
+
+def is_reachable(source, target, cutoff):
+    """True if any path of length <= cutoff exists between source and target."""
+    _, src_id = kg.resolve_curie(source)
+    _, tgt_id = kg.resolve_curie(target)
+    if src_id is None or tgt_id is None:
         return False
-    else:
-        return False
+    for _ in gt.all_paths(G, src_id, tgt_id, cutoff=cutoff):
+        return True
+    return False
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--log_dir", type=str, help="The path of logfile folder", default=os.path.join(ROOTPath, "log_folder"))
-    parser.add_argument("--log_name", type=str, help="Log file name", default="check_reachable.log")
-    parser.add_argument('--tp_pairs', type=str, help='Path to a file containg true positive pairs', default=os.path.join(ROOTPath, "data", "tp_pairs.txt"))
+    parser.add_argument("--log_name", type=str, help="Log file name", default="step9_check_reachable.log")
+    parser.add_argument('--tp_pairs', type=str, help='Path to true positive pairs', default=os.path.join(ROOTPath, "data", "ground_truth_pairs", "tp_pairs.txt"))
     parser.add_argument('--bandwidth', type=int, help='Maximum number of neighbors', default=3000)
     parser.add_argument('--max_path', type=int, help='Maximum length of path', default=3)
-    parser.add_argument('--combined_expert_paths', type=str, help='path to a file containing drugbank-based and molepro paths', default=os.path.join(ROOTPath, "data", "expert_path_files", "p_expert_paths_combined.txt"))
+    parser.add_argument('--combined_expert_paths', type=str, help='Path to drugbank+molepro combined paths', default=os.path.join(ROOTPath, "data", "expert_path_files", "p_expert_paths_combined.txt"))
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 
-    logger = utils.get_logger(os.path.join(args.log_dir,args.log_name))
+    logger = utils.get_logger(os.path.join(args.log_dir, args.log_name))
     logger.info(args)
 
-    ## read pruned knowledge graph with specified neighbor bandwidth
-    kg = knowledge_graph(args.output_folder, bandwidth=args.bandwidth)
-    
-    ## store knowledge graph in graph tool
-    G = gt.Graph()
-    kg_tmp = dict()
-    for source in kg.graph:
-        for (relation, target) in kg.graph[source]:
-            if (source, target) not in kg_tmp:
-                kg_tmp[(source, target)] = set([relation])
-            else:
-                kg_tmp[(source, target)].update(set([relation]))
-    etype = G.new_edge_property('object')
-    for (source, target) in kg_tmp:
-        e = G.add_edge(source,target)
-        etype[e] = kg_tmp[(source, target)]
-    G.edge_properties['edge_type'] = etype
+    ## ── Build pruned knowledge graph and graph-tool Graph ───────────────
+    kg = KnowledgeGraph(args.output_folder, bandwidth=args.bandwidth, logger=logger)
+    G = build_graph_tool_graph(kg.graph)
 
-    ## read potential expert paths
-    p_expert_paths = pd.read_csv(args.combined_expert_paths, sep='\t', header=0)
-    for col in p_expert_paths.columns:
-        p_expert_paths.loc[p_expert_paths[col].isna(),col] = None
-    p_expert_paths = p_expert_paths.apply(lambda row: [convert_to_canonicalized_curie(row[0]),convert_to_canonicalized_curie(row[1])], axis=1, result_type='expand').drop_duplicates().reset_index(drop=True)
+    ## ── Read and canonicalize expert path pairs ─────────────────────────
+    combined_df = pl.read_csv(args.combined_expert_paths, separator='\t')
+    all_curies = combined_df['subject'].to_list() + combined_df['object'].to_list()
+    logger.info(f"Batch-normalizing {len(set(all_curies))} unique CURIEs via Node Norm API")
+    utils.batch_normalize_curies(list(set(all_curies)))
+    canon_pairs = list({
+        (utils.get_canonical_curie(s), utils.get_canonical_curie(o))
+        for s, o in zip(combined_df['subject'].to_list(), combined_df['object'].to_list())
+    })
+    pair_df = pl.DataFrame(canon_pairs, schema=['source', 'n2'], orient='row')
 
+    ## ── Keep only pairs with a direct edge in the pruned KG ─────────────
+    direct_flags = [
+        is_directly_connected(row[0], row[1])
+        for row in pair_df.iter_rows()
+    ]
+    pair_df = pair_df.with_columns(pl.Series('direct', direct_flags))
+    expert_pairs = pair_df.filter(pl.col('direct')).select(['source', 'n2'])
 
-    ## check if there is an edge directly connecting between drug entities and protein entities in the pruned knolwedge graph 
-    p_expert_paths = p_expert_paths.apply(lambda row: [row[0],row[1], check_direct_connect([row[0],row[1]])], axis=1, result_type='expand')
-    p_expert_paths = p_expert_paths.loc[p_expert_paths[2],[0,1]].reset_index(drop=True)
-    p_expert_paths = p_expert_paths.rename(columns={0:'source',1:'n2'})
-    
-    ## merge target disease into the potential expert paths
-    tp_pairs = pd.read_csv(args.tp_pairs, sep='\t', header=0)
-    p_expert_paths_with_disease = p_expert_paths.merge(tp_pairs, left_on='source', right_on='source')
-    p_expert_paths_with_disease = p_expert_paths_with_disease.reset_index(drop=True)
+    ## ── Merge with true-positive (drug, disease) pairs ──────────────────
+    tp_pairs = pl.read_csv(args.tp_pairs, separator='\t').select([
+        pl.col('drug_id').alias('source'), pl.col('disease_id').alias('target'),
+    ])
+    expert_with_disease = expert_pairs.join(tp_pairs, on='source')
 
-    temp = p_expert_paths_with_disease[['n2','target']].drop_duplicates()
-    logger.info(f"{len(temp)} n2-target pairs need to be checked for path with length {args.max_path - 1}")
-    temp = temp.reset_index(drop=True)
-    temp['cutoff'] = args.max_path - 1
-    iters = list(temp.to_records(index=False))
-    reachable = [elem for elem in map(check_connect, iters)]
-    temp['reachable'] = reachable
-    temp = pd.merge(p_expert_paths_with_disease,temp,how='left', left_on=['n2','target'], right_on=['n2','target'])
-    temp = temp.drop(['cutoff'], axis=1)
-    temp.loc[temp['reachable'].isna(),'reachable'] = False
-    p_expert_paths_with_disease = temp
-    p_expert_paths_with_disease.to_csv(os.path.join(args.output_folder, 'expert_path_files', f"reachable_expert_paths_max{args.max_path}.txt"),sep='\t',index=None)
+    ## ── Check n2→target reachability (path length max_path - 1) ─────────
+    n2_target = expert_with_disease.select(['n2', 'target']).unique()
+    logger.info(f"{n2_target.height} n2-target pairs to check for path length {args.max_path - 1}")
 
-    ## extract reachable drug-disease pairs form experet demonstration paths
-    reachable_tp_pairs = p_expert_paths_with_disease.loc[p_expert_paths_with_disease['reachable'],['source','target']].drop_duplicates().reset_index(drop=True)
-    temp = {(reachable_tp_pairs.loc[index,'source'],reachable_tp_pairs.loc[index,'target']):1 for index in range(len(reachable_tp_pairs))}
-    check_pairs = [(tp_pairs.loc[index,'source'],tp_pairs.loc[index,'target']) for index in range(len(tp_pairs)) if (tp_pairs.loc[index,'source'],tp_pairs.loc[index,'target']) not in temp]
-    temp = pd.DataFrame(check_pairs)
-    logger.info(f"{len(temp)} source-target pairs need to be checked for path with length {args.max_path}")
-    temp['cutoff'] = args.max_path
-    iters = list(temp.to_records(index=False))
-    reachable = [elem for elem in map(check_connect, iters)]
-    temp['reachable'] = reachable
-    temp = temp.drop(['cutoff'], axis=1)
-    reachable_tp_pairs = pd.concat([reachable_tp_pairs,temp.loc[temp['reachable'],[0,1]].rename(columns={0:'source',1:'target'})]).reset_index(drop=True)
-    unreachable_tp_pairs = temp.loc[~temp['reachable'],[0,1]].rename(columns={0:'source',1:'target'}).reset_index(drop=True)
+    n2_reachable = [
+        is_reachable(row[0], row[1], args.max_path - 1)
+        for row in n2_target.iter_rows()
+    ]
+    n2_target = n2_target.with_columns(pl.Series('reachable', n2_reachable))
 
-    ## save reachable_tp_pairs and unreachable_tp_pairs to text files
-    reachable_tp_pairs.to_csv(os.path.join(args.output_folder, 'expert_path_files', f"reachable_tp_pairs_max{args.max_path}.txt"), sep='\t',index=None)
-    unreachable_tp_pairs.to_csv(os.path.join(args.output_folder, 'expert_path_files', f"unreachable_tp_pairs_max{args.max_path}.txt"), sep='\t',index=None)
+    expert_with_disease = (
+        expert_with_disease
+        .join(n2_target, on=['n2', 'target'], how='left')
+        .with_columns(pl.col('reachable').fill_null(False))
+    )
+    expert_with_disease.write_csv(
+        os.path.join(args.output_folder, 'expert_path_files', f"reachable_expert_paths_max{args.max_path}.txt"),
+        separator='\t',
+    )
+
+    ## ── Check remaining source→target pairs (full max_path) ─────────────
+    reachable_tp_pairs = (
+        expert_with_disease
+        .filter(pl.col('reachable'))
+        .select(['source', 'target'])
+        .unique()
+    )
+    already_reachable = set(reachable_tp_pairs.iter_rows())
+
+    remaining_pairs = [
+        (s, t) for s, t in tp_pairs.select(['source', 'target']).iter_rows()
+        if (s, t) not in already_reachable
+    ]
+
+    if remaining_pairs:
+        remaining_df = pl.DataFrame(remaining_pairs, schema=['source', 'target'], orient='row')
+        logger.info(f"{remaining_df.height} source-target pairs to check for path length {args.max_path}")
+
+        st_reachable = [
+            is_reachable(row[0], row[1], args.max_path)
+            for row in remaining_df.iter_rows()
+        ]
+        remaining_df = remaining_df.with_columns(pl.Series('reachable', st_reachable))
+
+        newly_reachable = remaining_df.filter(pl.col('reachable')).select(['source', 'target'])
+        unreachable_tp_pairs = remaining_df.filter(~pl.col('reachable')).select(['source', 'target'])
+        reachable_tp_pairs = pl.concat([reachable_tp_pairs, newly_reachable])
+    else:
+        unreachable_tp_pairs = pl.DataFrame(schema={'source': pl.Utf8, 'target': pl.Utf8})
+
+    ## ── Save results ────────────────────────────────────────────────────
+    reachable_tp_pairs.write_csv(
+        os.path.join(args.output_folder, 'expert_path_files', f"reachable_tp_pairs_max{args.max_path}.txt"),
+        separator='\t',
+    )
+    unreachable_tp_pairs.write_csv(
+        os.path.join(args.output_folder, 'expert_path_files', f"unreachable_tp_pairs_max{args.max_path}.txt"),
+        separator='\t',
+    )

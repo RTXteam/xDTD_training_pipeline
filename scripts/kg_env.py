@@ -207,6 +207,7 @@ class KGEnvironment(object):
         next_relation_ids, next_entity_ids = true_next_act
 
         def offset_path_history(p, offset):
+            offset = offset.cpu()
             for i, x in enumerate(p):
                 p[i] = x[offset, :]
 
