@@ -104,7 +104,8 @@ class xDTDMappingDB():
                 agent_type TEXT,
                 stage_qualifier TEXT,
                 original_subject TEXT,
-                original_object TEXT
+                original_object TEXT,
+                extra_attributes TEXT
             )
         """)
         self.conn.commit()
@@ -116,7 +117,7 @@ class xDTDMappingDB():
 
         BATCH_SIZE = 50000
         NODE_INSERT = "INSERT INTO NODE_MAPPING_TABLE VALUES (?,?,?,?,?,?,?,?,?,?)"
-        EDGE_INSERT = "INSERT INTO EDGE_MAPPING_TABLE VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        EDGE_INSERT = "INSERT INTO EDGE_MAPPING_TABLE VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA synchronous = OFF")
@@ -156,12 +157,18 @@ class xDTDMappingDB():
         self.logger.info("Inserting edges into EDGE_MAPPING_TABLE...")
         batch = []
         edge_count = 0
+        CORE_KEYS = {
+            'subject', 'predicate', 'object', 'id', 'category', 'qualifier',
+            'publications', 'sources', 'knowledge_level', 'agent_type',
+            'stage_qualifier', 'original_subject', 'original_object',
+        }
         with open(edges_jsonl_path, 'r', encoding='utf-8') as f:
             for line in tqdm(f, desc="Inserting edges into EDGE_MAPPING_TABLE"):
                 d = json.loads(line)
                 sources = d.get('sources', [])
                 resource_ids = '|'.join(s.get('resource_id', '') for s in sources)
                 resource_roles = '|'.join(s.get('resource_role', '') for s in sources)
+                extra = {k: v for k, v in d.items() if k not in CORE_KEYS}
                 row = (
                     d['subject'],
                     d['predicate'],
@@ -178,6 +185,7 @@ class xDTDMappingDB():
                     d.get('stage_qualifier'),
                     d.get('original_subject'),
                     d.get('original_object'),
+                    json.dumps(extra) if extra else None,
                 )
                 batch.append(row)
                 edge_count += 1
@@ -229,7 +237,7 @@ class xDTDMappingDB():
             'subject', 'predicate', 'object', 'id', 'category', 'qualifier',
             'publications', 'sources', 'resource_id', 'resource_role',
             'knowledge_level', 'agent_type', 'stage_qualifier',
-            'original_subject', 'original_object'
+            'original_subject', 'original_object', 'extra_attributes'
         ])
         cursor = self.conn.cursor()
         cursor.execute(

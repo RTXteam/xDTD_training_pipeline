@@ -17,27 +17,29 @@ import utils
 
 class BuildExplainableDTD(object):
 
-    def __init__(self, logger, path_to_score_results, path_to_path_results, database_name=None, outdir=None):
+    def __init__(self, logger, path_to_score_results=None, path_to_path_results=None, database_name=None, outdir=None):
         """
         Args:
             logger: logging.Logger instance.
-            path_to_score_results (str): path to a folder containing the prediction score results of all diseases
-            path_to_path_results (str): path to a folder containing the path results of all diseases
+            path_to_score_results (str, optional): path to a folder containing the prediction score results.
+            path_to_path_results (str, optional): path to a folder containing the path results.
             database_name (str, optional): database name (Defaults: ExplainableDTD.db).
             outdir (str, optional): path to a folder where the database is generated (Defaults: ./).
         """
         self.logger = logger
+        self.success_con = False
 
-        if not os.path.exists(path_to_score_results) or not len(os.listdir(path_to_score_results)) > 0:
-            self.logger.error(f"The given path '{path_to_score_results}' doesn't exist or is an empty folder")
-            raise
-        else:
-            self.path_to_score_results = path_to_score_results
-        if not os.path.exists(path_to_path_results) or not len(os.listdir(path_to_path_results)) > 0:
-            self.logger.error(f"The given path '{path_to_path_results}' doesn't exist or is an empty folder")
-            raise
-        else:
-            self.path_to_path_results = path_to_path_results
+        if path_to_score_results:
+            if not os.path.exists(path_to_score_results) or not len(os.listdir(path_to_score_results)) > 0:
+                self.logger.error(f"The given path '{path_to_score_results}' doesn't exist or is an empty folder")
+                raise ValueError(f"Invalid path: {path_to_score_results}")
+        self.path_to_score_results = path_to_score_results
+
+        if path_to_path_results:
+            if not os.path.exists(path_to_path_results) or not len(os.listdir(path_to_path_results)) > 0:
+                self.logger.error(f"The given path '{path_to_path_results}' doesn't exist or is an empty folder")
+                raise ValueError(f"Invalid path: {path_to_path_results}")
+        self.path_to_path_results = path_to_path_results
 
         self.database_name = database_name or "ExplainableDTD.db"
         if outdir is None:
@@ -235,33 +237,33 @@ def main():
         parser.print_help()
         sys.exit(2)
 
+    logger = utils.get_logger(os.path.join(ROOTPath, "log_folder", "build_sql_database.log"))
+
     if args.build:
-        # Build mode: input directories are required
         if not args.path_to_score_results or not args.path_to_path_results:
             parser.error("--path_to_score_results and --path_to_path_results are required for --build")
         db = BuildExplainableDTD(
+            logger=logger,
             path_to_score_results=args.path_to_score_results,
             path_to_path_results=args.path_to_path_results,
             database_name=args.database_name,
             outdir=args.outdir,
-            build=True,
         )
         db.create_tables()
         db.populate_table()
         db.create_indexes()
     else:
-        # Test-only mode: connect to existing database (run mode)
         db = BuildExplainableDTD(
+            logger=logger,
             database_name=args.database_name,
             outdir=args.outdir,
-            build=False,
         )
 
     if args.test:
         print("==== Testing: score table by disease ID ====", flush=True)
-        print(db.get_top_drugs_for_disease(disease_curie_ids='MONDO:0000313'))
+        print(db.get_top_drugs_for_disease('MONDO:0000313'))
         print("==== Testing: top paths by disease ID ====", flush=True)
-        print(db.get_top_path(disease_curie_ids='MONDO:0000313'))
+        print(db.get_top_paths_for_disease('MONDO:0000313'))
 
 
 if __name__ == "__main__":
