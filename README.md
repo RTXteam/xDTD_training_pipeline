@@ -258,7 +258,7 @@ These tables enable looking up KG node/edge metadata when interpreting predicted
 
 ## Output Database
 
-The final database (e.g. `ExplainableDTD_tier0-20260408.db`) contains four tables:
+The final database (e.g. `ExplainableDTD_v1.0-tier0-20260408-all_with_paths.db`) contains four tables:
 
 | Table | Records | Purpose |
 |-------|---------|---------|
