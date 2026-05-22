@@ -14,3 +14,18 @@ __pycache__/
 
 # python compiled files
 *.pyc
+
+# data folder
+data/
+
+# snakefile cache
+.snakemake/
+
+# log folder
+log_folder/
+
+# models folder
+models/
+
+# results folder
+results/

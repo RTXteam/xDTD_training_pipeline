@@ -714,20 +714,34 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
         threshold = 0.3
     run:
+        import subprocess
+        script = str(input.script)
+        data_dir = str(input.data_dir)
+        model_dir = str(input.model_dir)
+        out_dir = str(params.out_dir)
+        log_dir = os.path.join(out_dir, "process_logs")
+        os.makedirs(log_dir, exist_ok=True)
         for index in range(int(params.K)):
-            shell(f"nohup python {input.script} --log_name run_xDTD_{index+1}.log \
-                              --data_path {input.data_dir} \
-                              --model_path {input.model_dir} \
-                              --disease_set {input.data_dir}/disease_sets/disease_set{index+1}.txt \
-                              --out_dir {params.out_dir} \
-                              --N_drugs {params.N_drugs} \
-                              --N_paths {params.N_paths} \
-                              --batch_size {params.batch_size} \
-                              --max_path {params.max_path} \
-                              --bandwidth {params.bandwidth} \
-                              --bucket_interval {params.bucket_interval} \
-                              --state_history {params.state_history} \
-                              --threshold {params.threshold} &")
+            idx = index + 1
+            cmd = [
+                "python", script,
+                "--log_name", "run_xDTD_" + str(idx) + ".log",
+                "--data_path", data_dir,
+                "--model_path", model_dir,
+                "--disease_set", os.path.join(data_dir, "disease_sets", "disease_set" + str(idx) + ".txt"),
+                "--out_dir", out_dir,
+                "--N_drugs", str(params.N_drugs),
+                "--N_paths", str(params.N_paths),
+                "--batch_size", str(params.batch_size),
+                "--max_path", str(params.max_path),
+                "--bandwidth", str(params.bandwidth),
+                "--bucket_interval", str(params.bucket_interval),
+                "--state_history", str(params.state_history),
+                "--threshold", str(params.threshold),
+            ]
+            stdout_f = open(os.path.join(log_dir, "run_xDTD_" + str(idx) + ".stdout"), "w")
+            stderr_f = open(os.path.join(log_dir, "run_xDTD_" + str(idx) + ".stderr"), "w")
+            subprocess.Popen(cmd, start_new_session=True, stdout=stdout_f, stderr=stderr_f)
 
 rule step23_build_sql_database:
     input:
