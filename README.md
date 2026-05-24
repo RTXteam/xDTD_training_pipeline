@@ -85,7 +85,7 @@ Edit `config.yaml` before running the pipeline. Key parameters you may need to a
 
 ### DrugBank XML
 
-You need a DrugBank account to download `drugbank.xml` from [DrugBank Releases](https://go.drugbank.com/releases/latest). Place the file in the `data/` folder before running the pipeline.
+You need a DrugBank account to download `drugbank.xml` from [DrugBank Releases](https://go.drugbank.com/releases/latest). For Koslicki Lab internal use, you can find it under `/scratch/backup/xDTD_training_pipeline_files`. Place the file in the `data/` folder before running the pipeline.
 
 ---
 
