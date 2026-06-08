@@ -35,7 +35,6 @@ dependencies:
     - polars==1.27.0
     - tensorboard==2.8.0
     - tqdm==4.67.3
-    - xgboost==2.1.4
     - graph-walker==1.0.6
     - biolink-helper-pkg==1.0.1
     - optuna==4.3.0
