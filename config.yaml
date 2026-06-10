@@ -3,7 +3,7 @@ DRUGMECHDBINFO:
   DRUGMECHDB_PATH: "indication_paths.yaml"
 
 TRANSLATOR_KG:
-  DOWNLOAD_URL: "https://kgx-storage.rtx.ai/releases/translator_kg/latest/translator_kg.tar.zst"
+  DOWNLOAD_URL: "https://kgx-storage.ci.transltr.io/releases/translator_kg/2026_05_26/translator_kg.tar.zst"
   NODES_JSONL: "translator_kg/nodes.jsonl"
   EDGES_JSONL: "translator_kg/edges.jsonl"
 
@@ -21,7 +21,7 @@ DRUG_DISEASE_LIST:
   DISEASE_FILE: "matrix-disease-list.tsv"
 
 KGINFO:
-  BIOLINK_VERSION: "4.3.6"
+  BIOLINK_VERSION: "4.3.9"
   PUBLICATION_CUTOFF: 10
 
 EXTERNAL_DATA:
@@ -33,7 +33,7 @@ MODELINFO:
     MAX_PATH: 3
     BUCKET_INTERVAL: 50
     SEED: 1023
-    GPU: 1
+    GPU: 3
     STATE_HISTORY: 2
     LEARNING_RATE: 0.0005
     EXPERT_PATH_PROCESS: 180
@@ -49,4 +49,4 @@ PARALLEL_PRECOMPUTE:
   BATCH_SIZE: 200
 
 DATABASE:
-  DATABASE_NAME: 'ExplainableDTD_v1.0-tier0-20260408-all_with_paths.db'
+  DATABASE_NAME: 'ExplainableDTD_v1.0-tier0-20260526-all_with_paths.db'

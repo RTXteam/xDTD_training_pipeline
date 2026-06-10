@@ -42,8 +42,8 @@ Please cite via:
   - [Step 21 — Select Best Model](#step-21--select-best-model)
   - [Step 22 — Split Diseases into K Pieces](#step-22--split-diseases-into-k-pieces)
   - [Step 23 — Pre-compute All Drug-Disease Pairs](#step-23--pre-compute-all-drug-disease-pairs)
-  - [Step 23 — Build SQL Database](#step-23--build-sql-database)
-  - [Step 24 — Build Mapping Database](#step-24--build-mapping-database)
+  - [Step 24 — Build SQL Database](#step-24--build-sql-database)
+  - [Step 25 — Build Mapping Database](#step-25--build-mapping-database)
 - [Output Database](#output-database)
 - [Contact](#contact)
 
@@ -100,8 +100,8 @@ nohup snakemake --cores 16 -s Run_Pipeline.smk targets &
 > **Note:** Step 23 (pre-computation) runs in the background. Once it finishes, run the final two database-building steps separately:
 
 ```bash
-nohup snakemake --cores 16 -s Run_Pipeline.smk step23_build_sql_database &
-nohup snakemake --cores 16 -s Run_Pipeline.smk step24_build_mapping_database &
+nohup snakemake --cores 16 -s Run_Pipeline.smk step24_build_sql_database &
+nohup snakemake --cores 16 -s Run_Pipeline.smk step25_build_mapping_database &
 ```
 
 ---
@@ -234,7 +234,7 @@ Splits the disease list into K chunks for parallel pre-computation, and identifi
 
 Launches K parallel processes to pre-compute prediction scores and explanation paths for all drug-disease pair combinations. Each process handles one disease chunk. **This step runs in the background.**
 
-### Step 23 &mdash; Build SQL Database
+### Step 24 &mdash; Build SQL Database
 
 Reads the pre-computed results and builds the SQLite database with two tables:
 
@@ -243,7 +243,7 @@ Reads the pre-computed results and builds the SQLite database with two tables:
 | `PREDICTION_SCORE_TABLE` | `drug_id`, `disease_id` | Drug-disease prediction scores (`tn_score`, `tp_score`, `unknown_score`) |
 | `PATH_RESULT_TABLE` | `drug_id`, `disease_id` | Predicted explanation paths with path scores |
 
-### Step 24 &mdash; Build Mapping Database
+### Step 25 &mdash; Build Mapping Database
 
 Reads the translator KG JSONL files and adds two mapping tables to the existing SQLite database:
 

@@ -82,7 +82,7 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")),
         ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_transitions_history" + _STATE_HISTORY + ".pkl")),
         ancient(os.path.join(CURRENT_PATH, "models", "pretrain_AC_model", "pretrained_ac_model.pt")),
-        ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "policy_model_epoch70.pt")),
+        ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step20_training_done.flag")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
         ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
         ancient(os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl")),
@@ -580,7 +580,7 @@ rule step20_train_adac_model:
         text_emb_file = ancient(os.path.join(CURRENT_PATH, "data", "text_embedding", "embedding_biobert_namecat.pkl")),
         path_trans_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_transitions_history" + _STATE_HISTORY + ".pkl"))
     output:
-        os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "policy_model_epoch70.pt")
+        os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step20_training_done.flag")
     params:
         path_file_name = "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl",
         text_emb_file_name = "embedding_biobert_namecat.pkl",
@@ -628,14 +628,15 @@ rule step20_train_adac_model:
                                 --act_dropout {params.act_dropout} \
                                 --ac_lr {params.ac_lr} \
                                 --disc_lr {params.disc_lr} \
-                                --metadisc_lr {params.metadisc_lr}                              
+                                --metadisc_lr {params.metadisc_lr} && \
+        touch {output}
         """
 
 rule step21_select_best_model:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "select_best_moa_model.py")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
-        policy_net_folder_check = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "policy_model_epoch70.pt")),
+        policy_net_folder_check = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step20_training_done.flag")),
         pretrained_model = ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")),
     output:
         os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")
@@ -743,7 +744,7 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
             stderr_f = open(os.path.join(log_dir, "run_xDTD_" + str(idx) + ".stderr"), "w")
             subprocess.Popen(cmd, start_new_session=True, stdout=stdout_f, stderr=stderr_f)
 
-rule step23_build_sql_database:
+rule step24_build_sql_database:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_sql_database.py")),
         unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
@@ -763,7 +764,7 @@ rule step23_build_sql_database:
                               --outdir {params.outdir}
         """
 
-rule step24_build_mapping_database:
+rule step25_build_mapping_database:
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_mapping_db.py")),
         nodes_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL'])),
