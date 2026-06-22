@@ -36,7 +36,7 @@ dependencies:
     - tensorboard==2.8.0
     - tqdm==4.67.3
     - graph-walker==1.0.6
-    - biolink-helper-pkg==1.0.1
+    - bmt==1.4.8
     - optuna==4.3.0
     - openpyxl==3.1.5
     - datasets==4.8.4

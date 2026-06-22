@@ -85,7 +85,7 @@ if __name__ == '__main__':
     logger.info(f"Pre-computing ancestors for {len(unique_predicates)} unique predicates")
     predicate_ancestors = {}
     for pred in unique_predicates:
-        ancestors = set(biolink_helper.get_ancestors(pred, include_mixins=False))
+        ancestors = set(biolink_helper.get_ancestors(pred, mixin=False, formatted=True))
         ancestors.discard(pred)
         predicate_ancestors[pred] = ancestors
 

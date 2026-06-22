@@ -17,7 +17,7 @@ import polars as pl
 import requests
 import torch
 import torch.nn as nn
-from biolink_helper_pkg import BiolinkHelper
+from bmt import Toolkit as BiolinkToolkit
 from sklearn.metrics import f1_score, precision_recall_curve
 from torch.autograd import Variable
 from tqdm import tqdm
@@ -26,30 +26,26 @@ from models import Transition
 
 plt.switch_backend('agg')
 
-## ── BiolinkHelper singleton ─────────────────────────────────────────────
+## ── BiolinkToolkit singleton ─────────────────────────────────────────────
 @functools.lru_cache(maxsize=1)
 def get_biolink_helper(biolink_version='4.2.0'):
-    """Return a lazily-initialized, cached BiolinkHelper instance."""
-    pathlist = os.getcwd().split(os.path.sep)
-    root_index = pathlist.index("xDTD_training_pipeline")
-    root_path = os.path.sep.join([*pathlist[:(root_index + 1)]])
-    biolink_cache = os.path.join(root_path, "data", "biolink_cache")
-    os.makedirs(biolink_cache, exist_ok=True)
-    return BiolinkHelper(biolink_version=biolink_version, cached_path=biolink_cache)
+    """Return a lazily-initialized, cached bmt Toolkit instance."""
+    url = f'https://raw.githubusercontent.com/biolink/biolink-model/v{biolink_version}/biolink-model.yaml'
+    return BiolinkToolkit(url)
 
 
 def get_primary_category(categories, biolink_version='4.2.0'):
-    """Pick the most specific non-mixin, non-NamedThing category using BiolinkHelper."""
+    """Pick the most specific non-mixin, non-NamedThing category using bmt Toolkit."""
     if not categories:
         return 'biolink:NamedThing'
-    bh = get_biolink_helper(biolink_version)
-    non_mixin = bh.filter_out_mixins(categories)
+    tk = get_biolink_helper(biolink_version)
+    non_mixin = [c for c in categories if not tk.is_mixin(c)]
     non_mixin = [c for c in non_mixin if c != 'biolink:NamedThing']
     if not non_mixin:
         return 'biolink:NamedThing'
     if len(non_mixin) == 1:
         return non_mixin[0]
-    return min(non_mixin, key=lambda c: len(bh.get_descendants(c, include_mixins=False)))
+    return min(non_mixin, key=lambda c: len(tk.get_descendants(c, mixin=False, formatted=True)))
 
 
 def get_leaf_categories(categories, biolink_version='4.2.0'):
@@ -60,14 +56,14 @@ def get_leaf_categories(categories, biolink_version='4.2.0'):
     """
     if not categories:
         return ['biolink:NamedThing']
-    bh = get_biolink_helper(biolink_version)
-    non_mixin = bh.filter_out_mixins(categories)
+    tk = get_biolink_helper(biolink_version)
+    non_mixin = [c for c in categories if not tk.is_mixin(c)]
     non_mixin = [c for c in non_mixin if c != 'biolink:NamedThing']
     if not non_mixin:
         return ['biolink:NamedThing']
     all_ancestors = set()
     for cat in non_mixin:
-        ancestors = set(bh.get_ancestors(cat, include_mixins=False))
+        ancestors = set(tk.get_ancestors(cat, mixin=False, formatted=True))
         ancestors.discard(cat)
         all_ancestors.update(ancestors)
     leaves = [c for c in non_mixin if c not in all_ancestors]
@@ -308,8 +304,8 @@ def build_graph_tool_graph(kg_graph):
 
 
 def get_depth_of_predicate(predicate_list, biolink_version='4.2.0'):
-    bh = get_biolink_helper(biolink_version)
-    return {predicate: len(bh.get_ancestors(predicate, include_mixins=False)) for predicate in predicate_list}
+    tk = get_biolink_helper(biolink_version)
+    return {predicate: len(tk.get_ancestors(predicate, mixin=False, formatted=True)) for predicate in predicate_list}
 
 
 ## ── Embedding / model loading helpers ────────────────────────────────────
