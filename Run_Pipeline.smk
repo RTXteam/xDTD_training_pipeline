@@ -1,6 +1,15 @@
 """
 This file is a SnakeMake Script to automate the xDTD model training
 
+Pipeline steps (22 total):
+  Steps 1-6:   Data download, KG processing, drug/disease lists, GT, preprocessing
+  Steps 7-10:  DrugBank expert paths, reachability, expert demonstration paths
+  Step  11:    Train/test split (90/10)
+  Step  12:    Node2Vec embedding generation
+  Step  13:    XGBoost ensemble training
+  Steps 14-17: RL pipeline (expert transitions, pretrain AC, ADAC, best model)
+  Steps 18-22: Precompute predictions, build SQL database
+
 Usage:
     snakemake --cores 16 -s Run_Pipeline.smk targets
 """
@@ -10,46 +19,50 @@ configfile: "./config.yaml"
 ## Import Python standard libraries
 import os, sys
 
-## Define Some Global Variables
+## Define Global Variables
 CURRENT_PATH = os.getcwd()
 _MAX_PATH = str(config['MODELINFO']['PARAMS']['MAX_PATH'])
 _STATE_HISTORY = str(config['MODELINFO']['PARAMS']['STATE_HISTORY'])
 
 ## Create Required Folders
-if not os.path.exists(os.path.join(CURRENT_PATH, "data")):
-    os.makedirs(os.path.join(CURRENT_PATH, "data"))
-if not os.path.exists(os.path.join(CURRENT_PATH, "log_folder")):
-    os.makedirs(os.path.join(CURRENT_PATH, "log_folder"))
-if not os.path.exists(os.path.join(CURRENT_PATH, "models")):
-    os.makedirs(os.path.join(CURRENT_PATH, "models"))
-if not os.path.exists(os.path.join(CURRENT_PATH, "results")):
-    os.makedirs(os.path.join(CURRENT_PATH, "results"))
+for _d in ["data", "data/ground_truth_pairs", "data/drug_disease_list",
+           "data/node2vec_output", "data/text_embedding",
+           "data/kg_init_embeddings", "data/expert_path_files",
+           "data/pretrain_reward_shaping_model_train_val_test_data_3class",
+           "log_folder", "models", "results", "reports", "reports/figures"]:
+    os.makedirs(os.path.join(CURRENT_PATH, _d), exist_ok=True)
 
-## Build Rules
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Final target
+## ═══════════════════════════════════════════════════════════════════════════════
 rule targets:
     input:
+        # ── Data downloads ──────────────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", config['DRUGMECHDBINFO']['DRUGMECHDB_PATH'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['EXTERNAL_DATA']['DRUGBANK_XML'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['EDGES_JSONL'])),
-        ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], config['GROUND_TRUTH_PAIRS']['INDICATION_FILE'])),
-        ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], config['GROUND_TRUTH_PAIRS']['CONTRAINDICATION_FILE'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], config['DRUG_DISEASE_LIST']['DRUG_FILE'])),
         ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], config['DRUG_DISEASE_LIST']['DISEASE_FILE'])),
+        # ── KG processing ──────────────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", 'graph_edges.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt')),
+        # ── Drug/disease lists & ground truth ──────────────────
         ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'drug_list.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'disease_list.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tp_pairs.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tn_pairs.txt')),
+        # ── Preprocessing ──────────────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", 'entity2freq.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'relation2freq.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'type2freq.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'adj_list.pkl')),
         ancient(os.path.join(CURRENT_PATH, "data", 'entity2typeid.pkl')),
         ancient(os.path.join(CURRENT_PATH, "data", 'kg.pgrk')),
+        # ── Expert paths ───────────────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'drugbank_dict.pkl')),
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'drugbank_mapping.txt')),
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', 'p_expert_paths.txt')),
@@ -62,70 +75,58 @@ rule targets:
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "expert_demonstration_paths_max" + _MAX_PATH + "_filtered.pkl")),
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "expert_demonstration_paths_translate_max" + _MAX_PATH + "_filtered.pkl")),
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
+        # ── Train/test split ───────────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "train_pairs.txt")),
-        ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "val_pairs.txt")),
         ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "test_pairs.txt")),
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
-        ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "val_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
         ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "test_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
-        ancient(os.path.join(CURRENT_PATH, "data", "text_embedding", "embedding_biobert_namecat.pkl")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "id_map.txt")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "category_map.txt")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-G.json")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-class_map.json")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-id_map.json")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-feats.npy")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-walks.txt")),
-        ancient(os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.npy")),
-        ancient(os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.txt")),
-        ancient(os.path.join(CURRENT_PATH, "data", "graphsage_output", "unsuprvised_graphsage_entity_embeddings.pkl")),
+        # ── Node2Vec embeddings ────────────────────────────────
+        ancient(os.path.join(CURRENT_PATH, "data", "node2vec_output", "node2vec_entity_embeddings.pkl")),
+        # ── XGBoost ensemble model ─────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")),
+        # ── RL pipeline ────────────────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_transitions_history" + _STATE_HISTORY + ".pkl")),
         ancient(os.path.join(CURRENT_PATH, "models", "pretrain_AC_model", "pretrained_ac_model.pt")),
-        ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step20_training_done.flag")),
+        ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step17_training_done.flag")),
         ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")),
+        # ── Precompute & database ──────────────────────────────
         ancient(os.path.join(CURRENT_PATH, "data", "disease_sets", "disease_set1.txt")),
         ancient(os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl")),
-        ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
+        ancient(os.path.join(CURRENT_PATH, "results", "step19_done.txt")),
         ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])),
-        ancient(os.path.join(CURRENT_PATH, "results", "step25_done.txt"))
+        ancient(os.path.join(CURRENT_PATH, "results", "step22_done.txt"))
 
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Steps 1-6: Data download, KG processing, GT, preprocessing
+## ═══════════════════════════════════════════════════════════════════════════════
 
 rule step1_download_data:
+    """Download DrugMechDB, Translator KG, and drug/disease lists."""
     output:
         os.path.join(CURRENT_PATH, "data", config['DRUGMECHDBINFO']['DRUGMECHDB_PATH']),
         os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL']),
         os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['EDGES_JSONL']),
-        os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], config['GROUND_TRUTH_PAIRS']['INDICATION_FILE']),
-        os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], config['GROUND_TRUTH_PAIRS']['CONTRAINDICATION_FILE']),
         os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], config['DRUG_DISEASE_LIST']['DRUG_FILE']),
         os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], config['DRUG_DISEASE_LIST']['DISEASE_FILE'])
     params:
         drugmechdb_link = config['DRUGMECHDBINFO']['LINK'],
         drugmechdb_path = config['DRUGMECHDBINFO']['DRUGMECHDB_PATH'],
         translator_kg_url = config['TRANSLATOR_KG']['DOWNLOAD_URL'],
-        gt_base_url = config['GROUND_TRUTH_PAIRS']['BASE_URL'],
-        gt_dir = config['GROUND_TRUTH_PAIRS']['DIR'],
-        gt_indication = config['GROUND_TRUTH_PAIRS']['INDICATION_FILE'],
-        gt_contraindication = config['GROUND_TRUTH_PAIRS']['CONTRAINDICATION_FILE'],
         dd_dir = config['DRUG_DISEASE_LIST']['DIR'],
         drug_ds = config['DRUG_DISEASE_LIST']['DRUG_DATASET'],
         drug_file = config['DRUG_DISEASE_LIST']['DRUG_FILE'],
         disease_ds = config['DRUG_DISEASE_LIST']['DISEASE_DATASET'],
         disease_file = config['DRUG_DISEASE_LIST']['DISEASE_FILE']
     run:
-        # ── Download DrugMechDB ───────────────────────────────────────────────────────────
+        # ── Download DrugMechDB ───────────────────────────────────────
         shell("curl {params.drugmechdb_link}/{params.drugmechdb_path} -o ./data/{params.drugmechdb_path}"),
-        # ── Download Translator KG ───────────────────────────────────────────────────────
+        # ── Download Translator KG ────────────────────────────────────
         shell("mkdir -p ./data/translator_kg"),
         shell("wget -O ./data/translator_kg.tar.zst {params.translator_kg_url}"),
         shell("tar -I zstd -xf ./data/translator_kg.tar.zst -C ./data/translator_kg/"),
         shell("rm -f ./data/translator_kg.tar.zst"),
-        # ── Download Ground Truth Pairs ─────────────────────────────────────────────────────
-        shell("mkdir -p ./data/{params.gt_dir}"),
-        shell("wget -O ./data/{params.gt_dir}/{params.gt_indication} {params.gt_base_url}/{params.gt_indication}"),
-        shell("wget -O ./data/{params.gt_dir}/{params.gt_contraindication} {params.gt_base_url}/{params.gt_contraindication}"),
-        # ── Download Drug-Disease List ───────────────────────────────────────────────────────
+        # ── Download Drug-Disease Lists from HuggingFace ──────────────
         import subprocess, sys
         dd_dir = os.path.join("data", config['DRUG_DISEASE_LIST']['DIR'])
         os.makedirs(dd_dir, exist_ok=True)
@@ -134,84 +135,84 @@ rule step1_download_data:
         subprocess.run([sys.executable, "-c", _dl_script, config['DRUG_DISEASE_LIST']['DISEASE_DATASET'], os.path.join(dd_dir, config['DRUG_DISEASE_LIST']['DISEASE_FILE'])], check=True)
 
 rule step2_process_translator_kg:
+    """Parse raw KG JSONL → graph_edges.txt, all_graph_nodes_info.txt."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "process_translator_kg.py")),
         nodes_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL'])),
         edges_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['EDGES_JSONL']))
     output:
         os.path.join(CURRENT_PATH, "data", 'graph_edges.txt'),
-        os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')
-    params:
-        biolink_version = config['KGINFO']['BIOLINK_VERSION']
+        os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt'),
+        os.path.join(CURRENT_PATH, "data", "biolink_version.txt")
     shell:
         """
         python {input.script} --nodes_jsonl {input.nodes_jsonl} \
-                              --edges_jsonl {input.edges_jsonl} \
-                              --biolink_version {params.biolink_version}
+                              --edges_jsonl {input.edges_jsonl}
         """
 
-rule step3_filtered_graph_nodes_and_edges:
+rule step3_filter_graph_nodes_and_edges:
+    """Filter graph by category and optionally remove edges from specified knowledge sources."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "filter_kg2_nodes_and_edges.py")),
         graph_edges = ancient(os.path.join(CURRENT_PATH, "data", 'graph_edges.txt')),
-        all_node_info = ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt'))
+        all_node_info = ancient(os.path.join(CURRENT_PATH, "data", 'all_graph_nodes_info.txt')),
+        biolink_version = ancient(os.path.join(CURRENT_PATH, "data", "biolink_version.txt"))
     output:
         os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt'),
         os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt')
     params:
-        pub_threshold = config['KGINFO']['PUBLICATION_CUTOFF'],
-        biolink_version = config['KGINFO']['BIOLINK_VERSION']
+        remove_sources = config['KGINFO'].get('REMOVE_KNOWLEDGE_SOURCES', [])
     shell:
         """
-        python {input.script} --graph_nodes {input.all_node_info} \
+        biolink_ver=$(cat {CURRENT_PATH}/data/biolink_version.txt) && python {input.script} --graph_nodes {input.all_node_info} \
                               --graph_edges {input.graph_edges} \
-                              --pub_threshold {params.pub_threshold} \
-                              --biolink_version {params.biolink_version} 
+                              --biolink_version $biolink_ver \
+                              --remove_knowledge_sources {params.remove_sources}
         """
 
 rule step4_process_drug_disease_list:
+    """Filter drug/disease lists to entities present in the KG."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "process_drug_disease_list.py")),
         drug_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], config['DRUG_DISEASE_LIST']['DRUG_FILE'])),
         disease_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], config['DRUG_DISEASE_LIST']['DISEASE_FILE'])),
-        graph_nodes = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt'))
+        graph_nodes = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt')),
+        biolink_version = ancient(os.path.join(CURRENT_PATH, "data", "biolink_version.txt"))
     output:
         os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'drug_list.txt'),
         os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'disease_list.txt')
-    params:
-        biolink_version = config['KGINFO']['BIOLINK_VERSION']
     shell:
         """
-        python {input.script} --drug_list {input.drug_list} \
+        biolink_ver=$(cat {CURRENT_PATH}/data/biolink_version.txt) && python {input.script} --drug_list {input.drug_list} \
                               --disease_list {input.disease_list} \
                               --graph_nodes {input.graph_nodes} \
-                              --biolink_version {params.biolink_version}
+                              --biolink_version $biolink_ver
         """
 
-rule step5_process_ground_truth_pairs:
+rule step5_convert_ground_truth:
+    """Convert EC gt_pairs_raw.tsv → tp_pairs.txt / tn_pairs.txt via Node Norm normalization."""
     input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "process_ground_truth_pairs.py")),
-        indication_file = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], config['GROUND_TRUTH_PAIRS']['INDICATION_FILE'])),
-        contraindication_file = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], config['GROUND_TRUTH_PAIRS']['CONTRAINDICATION_FILE'])),
+        script = ancient(os.path.join(CURRENT_PATH, "scripts", "convert_ec_ground_truth.py")),
+        ec_gt_file = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['GT_RAW_FILE'])),
         drug_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'drug_list.txt')),
         disease_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'disease_list.txt')),
-        graph_nodes = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt'))
+        graph_nodes = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt')),
+        biolink_version = ancient(os.path.join(CURRENT_PATH, "data", "biolink_version.txt"))
     output:
         os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tp_pairs.txt'),
         os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tn_pairs.txt')
-    params:
-        biolink_version = config['KGINFO']['BIOLINK_VERSION']
     shell:
         """
-        python {input.script} --indication_file {input.indication_file} \
-                              --contraindication_file {input.contraindication_file} \
+        biolink_ver=$(cat {CURRENT_PATH}/data/biolink_version.txt) && python {input.script} --ec_gt_file {input.ec_gt_file} \
                               --drug_list {input.drug_list} \
                               --disease_list {input.disease_list} \
                               --graph_nodes {input.graph_nodes} \
-                              --biolink_version {params.biolink_version}
+                              --biolink_version $biolink_ver \
+                              --output_folder {CURRENT_PATH}/data/{config[GROUND_TRUTH_PAIRS][DIR]}
         """
 
 rule step6_preprocess_data:
+    """Generate entity/relation/type frequencies, adjacency list, PageRank scores."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "preprocess_data.py")),
         graph_nodes = ancient(os.path.join(CURRENT_PATH, "data", "filtered_graph_nodes_info.txt")),
@@ -228,8 +229,13 @@ rule step6_preprocess_data:
         python {input.script} --graph_nodes {input.graph_nodes} --graph_edges {input.graph_edges}
         """
 
-## to run this step, you need to first download 'drugbank.xml' from DrugBank website 'https://go.drugbank.com/releases/latest' and put it in data/ folder
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Steps 7-10: DrugBank expert paths (needed for RL pipeline)
+## ═══════════════════════════════════════════════════════════════════════════════
+
 rule step7_process_drugbank_action_desc:
+    """Parse drugbank.xml for drug-gene-action expert paths."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "process_drugbank_action_desc.py")),
         nodes_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL'])),
@@ -244,6 +250,7 @@ rule step7_process_drugbank_action_desc:
         """
 
 rule step8_integrate_drugbank_and_molepro_data:
+    """Combine DrugBank + MolePro expert paths."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "integrate_drugbank_and_molepro_data.py")),
         nodes_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL'])),
@@ -258,6 +265,7 @@ rule step8_integrate_drugbank_and_molepro_data:
         """
 
 rule step9_check_reachable:
+    """Check 3-hop reachability of expert paths in the KG."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "check_reachable.py")),
         true_pairs = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tp_pairs.txt')),
@@ -282,9 +290,11 @@ rule step9_check_reachable:
         """
 
 rule step10_generate_expert_paths:
+    """Generate expert demonstration paths for RL training."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_expert_paths.py")),
-        reachable_expert_paths = ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "reachable_expert_paths_max" + _MAX_PATH + ".txt"))
+        reachable_expert_paths = ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "reachable_expert_paths_max" + _MAX_PATH + ".txt")),
+        biolink_version = ancient(os.path.join(CURRENT_PATH, "data", "biolink_version.txt"))
     output:
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', "expert_demonstration_paths_max" + _MAX_PATH + "_raw.pkl"),
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', "expert_demonstration_paths_max" + _MAX_PATH + "_filtered.pkl"),
@@ -294,21 +304,27 @@ rule step10_generate_expert_paths:
         bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
         process = config['MODELINFO']['PARAMS']['EXPERT_PATH_PROCESS'],
-        batch_size = config['MODELINFO']['PARAMS']['EXPERT_PATH_BATCH_SIZE'],
-        biolink_version = config['KGINFO']['BIOLINK_VERSION']
+        batch_size = config['MODELINFO']['PARAMS']['EXPERT_PATH_BATCH_SIZE']
     shell:
         """
-        python {input.script} --biolink_version {params.biolink_version} \
+        biolink_ver=$(cat {CURRENT_PATH}/data/biolink_version.txt) && python {input.script} --biolink_version $biolink_ver \
                               --reachable_expert_paths {input.reachable_expert_paths} \
                               --bandwidth {params.bandwidth} \
                               --batch_size {params.batch_size} \
                               --process {params.process} \
-                              --max_path {params.max_path} 
+                              --max_path {params.max_path}
         """
 
-rule step11_split_data_train_val_test:
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Step 11: Train/test split (single 90/10 fold)
+## ═══════════════════════════════════════════════════════════════════════════════
+
+rule step11_split_data_train_test:
+    """Split TP/TN pairs into train (90%) and test (10%), single fold.
+    Also splits expert demonstration paths by train/test for RL pipeline."""
     input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "split_data_train_val_test.py")),
+        script = ancient(os.path.join(CURRENT_PATH, "scripts", "split_data_train_test.py")),
         graph_edges = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_edges.txt')),
         tp_pairs = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tp_pairs.txt')),
         tn_pairs = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tn_pairs.txt')),
@@ -319,13 +335,11 @@ rule step11_split_data_train_val_test:
         filtered_path_relation_entity = ancient(os.path.join(CURRENT_PATH, "data", 'expert_path_files', "expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl"))
     output:
         os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "train_pairs.txt"),
-        os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "val_pairs.txt"),
         os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "test_pairs.txt"),
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl"),
-        os.path.join(CURRENT_PATH, "data", 'expert_path_files', "val_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl"),
         os.path.join(CURRENT_PATH, "data", 'expert_path_files', "test_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")
     params:
-        train_val_test_size = "[0.8, 0.1, 0.1]",
+        test_size = config['SPLIT']['TEST_SIZE'],
         seed = config['MODELINFO']['PARAMS']['SEED'],
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH']
     shell:
@@ -338,175 +352,114 @@ rule step11_split_data_train_val_test:
                               --entity2typeid {input.entity2typeid} \
                               --filtered_expert_paths {input.filtered_expert_paths} \
                               --filtered_path_relation_entity {input.filtered_path_relation_entity} \
-                              --train_val_test_size '{params.train_val_test_size}' \
+                              --max_path {params.max_path} \
+                              --test_size {params.test_size} \
                               --seed {params.seed} \
-                              --max_path {params.max_path}
+                              --output_folder {CURRENT_PATH}/data
         """
 
-rule step12_calculate_attribute_embedding:
-    input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "calculate_attribute_embedding.py")),
-        node_info = ancient(os.path.join(CURRENT_PATH, "data", 'filtered_graph_nodes_info.txt'))
-    output:
-        os.path.join(CURRENT_PATH, "data", "text_embedding", "embedding_biobert_namecat.pkl")
-    params:
-        gpu = config['MODELINFO']['PARAMS']['GPU'],
-        seed = config['MODELINFO']['PARAMS']['SEED'],
-        batch_size = 64,
-        pca_components = 80
-    shell:
-        """
-        python {input.script} --node_info {input.node_info}  \
-                              --gpu {params.gpu} \
-                              --use_gpu \
-                              --seed {params.seed} \
-                              --pca_components {params.pca_components} \
-                              --batch_size {params.batch_size}
-        """
 
-rule step13_graphsage_data_generation:
+## ═══════════════════════════════════════════════════════════════════════════════
+## Step 12: Node2Vec embedding generation
+## ═══════════════════════════════════════════════════════════════════════════════
+
+rule step12_generate_node2vec_embedding:
+    """Generate Node2Vec entity embeddings (drug-disease edges removed to prevent leakage)."""
     input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "graphsage_data_generation.py")),
+        script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_node2vec_embedding.py")),
         graph_nodes = ancient(os.path.join(CURRENT_PATH, "data", "filtered_graph_nodes_info.txt")),
         graph_edges = ancient(os.path.join(CURRENT_PATH, "data", "filtered_graph_edges.txt")),
-        entity2freq = ancient(os.path.join(CURRENT_PATH, "data", "entity2freq.txt")),
-        type2freq = ancient(os.path.join(CURRENT_PATH, "data", "type2freq.txt")),
-        emb_file = ancient(os.path.join(CURRENT_PATH, "data", "text_embedding", "embedding_biobert_namecat.pkl"))
+        tp_pairs = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tp_pairs.txt')),
+        tn_pairs = ancient(os.path.join(CURRENT_PATH, "data", config['GROUND_TRUTH_PAIRS']['DIR'], 'tn_pairs.txt'))
     output:
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "id_map.txt"),
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "category_map.txt"),
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-G.json"),
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-class_map.json"),
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-id_map.json"),
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-feats.npy")
+        os.path.join(CURRENT_PATH, "data", "node2vec_output", "node2vec_entity_embeddings.pkl")
     params:
-        seed = config['MODELINFO']['PARAMS']['SEED'],
-        feature_dim = 256,
-        validation_percent = 0.3
+        embedding_dim = config['NODE2VEC']['EMBEDDING_DIM'],
+        walk_length = config['NODE2VEC']['WALK_LENGTH'],
+        walks_per_node = config['NODE2VEC']['WALKS_PER_NODE'],
+        p = config['NODE2VEC']['P'],
+        q = config['NODE2VEC']['Q'],
+        iterations = config['NODE2VEC']['ITERATIONS'],
+        window_size = config['NODE2VEC']['WINDOW_SIZE'],
+        workers = config['NODE2VEC']['WORKERS'],
+        seed = config['NODE2VEC']['SEED']
     shell:
         """
-        python {input.script} --graph_nodes {input.graph_nodes}  \
+        python {input.script} --graph_nodes {input.graph_nodes} \
                               --graph_edges {input.graph_edges} \
-                              --entity2freq {input.entity2freq} \
-                              --type2freq {input.type2freq} \
-                              --emb_file {input.emb_file} \
-                              --seed {params.seed} \
-                              --feature_dim {params.feature_dim} \
-                              --validation_percent {params.validation_percent}
-        """
-
-rule step14_generate_random_walk:
-    input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_random_walk.py")),
-        Gjson = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-G.json"))
-    output:
-        os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-walks.txt")
-    params:
-        walk_length = 30,
-        number_of_walks = 10,
-        batch_size = 200000
-    shell:
-        """
-        python {input.script} --Gjson {input.Gjson}  \
+                              --tp_pairs {input.tp_pairs} \
+                              --tn_pairs {input.tn_pairs} \
+                              --embedding_dim {params.embedding_dim} \
                               --walk_length {params.walk_length} \
-                              --number_of_walks {params.number_of_walks} \
-                              --batch_size {params.batch_size}
+                              --walks_per_node {params.walks_per_node} \
+                              --p {params.p} \
+                              --q {params.q} \
+                              --iterations {params.iterations} \
+                              --window_size {params.window_size} \
+                              --workers {params.workers} \
+                              --seed {params.seed} \
+                              --output_folder {CURRENT_PATH}/data/node2vec_output
         """
 
-rule step15_generate_graphsage_embedding:
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Step 13: XGBoost ensemble training
+## ═══════════════════════════════════════════════════════════════════════════════
+
+rule step13_train_xgboost_ensemble:
+    """Train 3-shard XGBoost ensemble with replacement negatives and skopt GP HPO."""
     input:
-        id_map = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "id_map.txt")),
-        data_category_map = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "category_map.txt")),
-        data_Gjson = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-G.json")),
-        data_class_map = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-class_map.json")),
-        data_id_map = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-id_map.json")),
-        data_feats = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-feats.npy")),
-        data_walk = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_input", "data-walks.txt"))
-    output:
-        os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.npy"),
-        os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.txt")
-    params:
-        python27_path = "~/miniconda3/envs/graphsage_p2.7env/bin/python",
-        train_prefix = os.path.join(CURRENT_PATH, "data", "graphsage_input", "data"),
-        model_size = "big",
-        learning_rate = 0.001,
-        sample_size = 25,
-        dim_size = 128,
-        model_type = "graphsage_mean",
-        max_total_steps = 100000,
-        validate_iter = 1000,
-        batch_size = 512,
-        max_degree = 25
-    shell:
-        """
-        {params.python27_path} -m graphsage.unsupervised_train --train_prefix {params.train_prefix} \
-                                              --model_size {params.model_size} \
-                                              --learning_rate {params.learning_rate} \
-                                              --samples_1 {params.sample_size} \
-                                              --samples_2 {params.sample_size} \
-                                              --dim_1 {params.dim_size} \
-                                              --dim_2 {params.dim_size} \
-                                              --model {params.model_type} \
-                                              --max_total_steps {params.max_total_steps} \
-                                              --validate_iter {params.validate_iter} \
-                                              --batch_size {params.batch_size} \
-                                              --max_degree {params.max_degree}
-
-        """
-
-rule step16_transform_format:
-    input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "transform_format.py")),
-        val_npy = ancient(os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.npy")),
-        val_txt = ancient(os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000", "val.txt")),
-        data_dir = ancient(os.path.join(CURRENT_PATH, "data"))
-    output:
-        os.path.join(CURRENT_PATH, "data", "graphsage_output", "unsuprvised_graphsage_entity_embeddings.pkl")
-    params:
-        graphsage_result = ancient(os.path.join(CURRENT_PATH, "unsup-graphsage_input", "graphsage_mean_big_0.001000"))
-    shell:
-        """
-        python {input.script} --data_dir {input.data_dir} \
-                              --input {params.graphsage_result}
-        """
-
-
-rule step17_pretrain_xgboost_model:
-    input:
-        script = ancient(os.path.join(CURRENT_PATH, "scripts", "run_xgboost_model_3class.py")),
+        script = ancient(os.path.join(CURRENT_PATH, "scripts", "run_xgboost_ensemble_3class.py")),
         train_pairs = ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "train_pairs.txt")),
-        val_pairs = ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "val_pairs.txt")),
         test_pairs = ancient(os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class", "test_pairs.txt")),
-        unsuprvised_graphsage_entity_embeddings = ancient(os.path.join(CURRENT_PATH, "data", "graphsage_output", "unsuprvised_graphsage_entity_embeddings.pkl")),
+        embeddings = ancient(os.path.join(CURRENT_PATH, "data", "node2vec_output", "node2vec_entity_embeddings.pkl")),
         drug_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'drug_list.txt')),
-        disease_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'disease_list.txt')),
-        data_dir = ancient(os.path.join(CURRENT_PATH, "data"))
+        disease_list = ancient(os.path.join(CURRENT_PATH, "data", config['DRUG_DISEASE_LIST']['DIR'], 'disease_list.txt'))
     output:
         os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")
     params:
+        data_dir = os.path.join(CURRENT_PATH, "data"),
+        splits_dir = os.path.join(CURRENT_PATH, "data", "pretrain_reward_shaping_model_train_val_test_data_3class"),
         pair_emb_method = 'concatenate',
         output_folder = os.path.join(CURRENT_PATH, "models"),
         seed = config['MODELINFO']['PARAMS']['SEED'],
-        n_trials = config['MODELINFO']['PARAMS']['OPTUNA_N_TRIALS'],
-        n_startup_trials = config['MODELINFO']['PARAMS']['OPTUNA_N_STARTUP_TRIALS'],
-        early_stopping_rounds = config['MODELINFO']['PARAMS']['EARLY_STOPPING_ROUNDS']
+        n_shards = config['ENSEMBLE']['N_SHARDS'],
+        n_replacements = config['ENSEMBLE']['N_REPLACEMENTS'],
+        n_calls = config['ENSEMBLE']['SKOPT_N_CALLS'],
+        n_random_starts = config['ENSEMBLE']['SKOPT_N_RANDOM_STARTS'],
+        hpo_inner_test_size = config['ENSEMBLE']['HPO_INNER_TEST_SIZE'],
+        device = config['ENSEMBLE']['DEVICE'],
+        early_stopping_rounds = config['ENSEMBLE']['EARLY_STOPPING_ROUNDS'],
+        gpu_id = config['ENSEMBLE']['GPU_IDS'][0]
     shell:
         """
-        python {input.script} --data_dir {input.data_dir} \
+        export CUDA_VISIBLE_DEVICES={params.gpu_id}
+        python {input.script} --data_dir {params.data_dir} \
+                              --splits_dir {params.splits_dir} \
                               --pair_emb {params.pair_emb_method} \
                               --seed {params.seed} \
-                              --n_trials {params.n_trials} \
-                              --n_startup_trials {params.n_startup_trials} \
+                              --n_shards {params.n_shards} \
+                              --n_replacements {params.n_replacements} \
+                              --n_calls {params.n_calls} \
+                              --n_random_starts {params.n_random_starts} \
+                              --hpo_inner_test_size {params.hpo_inner_test_size} \
+                              --device {params.device} \
                               --early_stopping_rounds {params.early_stopping_rounds} \
                               --drug_list {input.drug_list} \
                               --disease_list {input.disease_list} \
                               --output_folder {params.output_folder}
         """
 
-rule step18_generate_expert_path_transition:
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Steps 14-17: RL pipeline (ADAC model training)
+## ═══════════════════════════════════════════════════════════════════════════════
+
+rule step14_generate_expert_path_transition:
+    """Convert expert paths into state-action transitions for RL training."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "generate_expert_path_transition.py")),
-        path_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl",)),
+        path_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data"))
     output:
         os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_transitions_history" + _STATE_HISTORY + ".pkl")
@@ -524,18 +477,21 @@ rule step18_generate_expert_path_transition:
                               --expert_trains_file_name {params.expert_trains_file_name}
         """
 
-rule step19_pretrain_ac_model:
+rule step15_pretrain_ac_model:
+    """Pre-train Actor-Critic model using expert demonstrations and XGBoost ensemble
+    for reward shaping. Node2Vec embeddings are used for entity initialization."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "run_pretrain_ac_model.py")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
         pretrained_model = ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")),
-        path_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl",)),
-        text_emb_file = ancient(os.path.join(CURRENT_PATH, "data", "text_embedding", "embedding_biobert_namecat.pkl"))
+        path_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
+        node2vec_emb = ancient(os.path.join(CURRENT_PATH, "data", "node2vec_output", "node2vec_entity_embeddings.pkl"))
     output:
         os.path.join(CURRENT_PATH, "models", "pretrain_AC_model", "pretrained_ac_model.pt")
     params:
         path_file_name = "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl",
-        text_emb_file_name = "embedding_biobert_namecat.pkl",
+        text_emb_file_name = "node2vec_entity_embeddings.pkl",
+        text_emb_dir = "node2vec_output",
         output_folder = os.path.join(CURRENT_PATH, "models"),
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
         max_pre_path = 10000000,
@@ -553,6 +509,7 @@ rule step19_pretrain_ac_model:
         python {input.script} --data_dir {input.data_dir} \
                               --path_file_name {params.path_file_name} \
                               --text_emb_file_name {params.text_emb_file_name} \
+                              --text_emb_dir {params.text_emb_dir} \
                               --output_folder {params.output_folder} \
                               --max_path {params.max_path} \
                               --max_pre_path {params.max_pre_path} \
@@ -569,21 +526,22 @@ rule step19_pretrain_ac_model:
                               --lr {params.lr}
         """
 
-
-rule step20_train_adac_model:
+rule step16_train_adac_model:
+    """Train the Adversarial Actor-Critic (ADAC) model with warm-start from pretrained AC."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "run_adac_model.py")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
         pretrained_model = ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")),
         pre_ac_file = ancient(os.path.join(CURRENT_PATH, "models", "pretrain_AC_model", "pretrained_ac_model.pt")),
-        path_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl",)),
-        text_emb_file = ancient(os.path.join(CURRENT_PATH, "data", "text_embedding", "embedding_biobert_namecat.pkl")),
+        path_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl")),
+        node2vec_emb = ancient(os.path.join(CURRENT_PATH, "data", "node2vec_output", "node2vec_entity_embeddings.pkl")),
         path_trans_file = ancient(os.path.join(CURRENT_PATH, "data", "expert_path_files", "train_expert_transitions_history" + _STATE_HISTORY + ".pkl"))
     output:
-        os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step20_training_done.flag")
+        os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step17_training_done.flag")
     params:
         path_file_name = "train_expert_demonstration_relation_entity_max" + _MAX_PATH + "_filtered.pkl",
-        text_emb_file_name = "embedding_biobert_namecat.pkl",
+        text_emb_file_name = "node2vec_entity_embeddings.pkl",
+        text_emb_dir = "node2vec_output",
         path_trans_file_name = "train_expert_transitions_history" + _STATE_HISTORY + ".pkl",
         output_folder = os.path.join(CURRENT_PATH, "models"),
         max_path = config['MODELINFO']['PARAMS']['MAX_PATH'],
@@ -594,19 +552,20 @@ rule step20_train_adac_model:
         train_batch_size = 1120,
         state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
         ac_update_delay = 50,
-        entropy_weight=0.005,
-        disc_alpha=0.006,
-        metadisc_alpha=0.012,
-        num_rollouts=35,
-        act_dropout=0.5,
-        ac_lr= config["MODELINFO"]['PARAMS']['LEARNING_RATE'],
-        disc_lr=config["MODELINFO"]['PARAMS']['LEARNING_RATE'],
-        metadisc_lr=config["MODELINFO"]['PARAMS']['LEARNING_RATE']
+        entropy_weight = 0.005,
+        disc_alpha = 0.006,
+        metadisc_alpha = 0.012,
+        num_rollouts = 35,
+        act_dropout = 0.5,
+        ac_lr = config["MODELINFO"]['PARAMS']['LEARNING_RATE'],
+        disc_lr = config["MODELINFO"]['PARAMS']['LEARNING_RATE'],
+        metadisc_lr = config["MODELINFO"]['PARAMS']['LEARNING_RATE']
     shell:
         """
         python {input.script} --data_dir {input.data_dir} \
                               --path_file_name {params.path_file_name} \
                               --text_emb_file_name {params.text_emb_file_name} \
+                              --text_emb_dir {params.text_emb_dir} \
                               --path_trans_file_name {params.path_trans_file_name} \
                               --output_folder {params.output_folder} \
                               --max_path {params.max_path} \
@@ -632,12 +591,13 @@ rule step20_train_adac_model:
         touch {output}
         """
 
-rule step21_select_best_model:
+rule step17_select_best_model:
+    """Evaluate ADAC model checkpoints and select the best MoA model."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "select_best_moa_model.py")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
-        policy_net_folder_check = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step20_training_done.flag")),
-        pretrained_model = ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt")),
+        policy_net_folder_check = ancient(os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "step17_training_done.flag")),
+        pretrained_model = ancient(os.path.join(CURRENT_PATH, "models", "xgboost_model_3class", "xgboost_model.pt"))
     output:
         os.path.join(CURRENT_PATH, "models", "ADAC_model", "policy_net", "best_moa_model.pt")
     params:
@@ -646,7 +606,7 @@ rule step21_select_best_model:
         bandwidth = config['MODELINFO']['PARAMS']['BANDWIDTH'],
         bucket_interval = config['MODELINFO']['PARAMS']['BUCKET_INTERVAL'],
         state_history = config['MODELINFO']['PARAMS']['STATE_HISTORY'],
-        act_dropout=0.5,
+        act_dropout = 0.5,
         seed = config['MODELINFO']['PARAMS']['SEED'],
         factor = 0.9,
         topk = 50,
@@ -671,7 +631,13 @@ rule step21_select_best_model:
                               --save_pred_paths
         """
 
-rule step22_split_disease_into_K_pieces:
+
+## ═══════════════════════════════════════════════════════════════════════════════
+## Steps 18-22: Precompute predictions & build SQL database
+## ═══════════════════════════════════════════════════════════════════════════════
+
+rule step18_split_disease_into_K_pieces:
+    """Split disease list into K chunks for parallel precomputation."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "split_disease_into_K_pieces.py")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
@@ -692,7 +658,8 @@ rule step22_split_disease_into_K_pieces:
                               --K {params.K}
         """
 
-rule step23_precompute_all_drug_disease_pairs_in_parallel:
+rule step19_precompute_all_drug_disease_pairs_in_parallel:
+    """Launch K parallel processes to precompute prediction scores and paths."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "run_xDTD.py")),
         data_dir = ancient(os.path.join(CURRENT_PATH, "data")),
@@ -702,7 +669,7 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
         disease_set2 = ancient(os.path.join(CURRENT_PATH, "data", "filtered_drug_nodes_for_precomputation.pkl")),
         model_dir = ancient(os.path.join(CURRENT_PATH, "models"))
     output:
-        touch(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
+        touch(os.path.join(CURRENT_PATH, "results", "step19_done.txt"))
     params:
         out_dir = os.path.join(CURRENT_PATH, 'results'),
         K = config['PARALLEL_PRECOMPUTE']['K'],
@@ -744,10 +711,11 @@ rule step23_precompute_all_drug_disease_pairs_in_parallel:
             stderr_f = open(os.path.join(log_dir, "run_xDTD_" + str(idx) + ".stderr"), "w")
             subprocess.Popen(cmd, start_new_session=True, stdout=stdout_f, stderr=stderr_f)
 
-rule step24_build_sql_database:
+rule step20_build_sql_database:
+    """Build the prediction score + path result SQLite database."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_sql_database.py")),
-        unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt"))
+        unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step19_done.txt"))
     output:
         os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME'])
     params:
@@ -764,15 +732,16 @@ rule step24_build_sql_database:
                               --outdir {params.outdir}
         """
 
-rule step25_build_mapping_database:
+rule step21_build_mapping_database:
+    """Add node/edge mapping tables to the SQLite database."""
     input:
         script = ancient(os.path.join(CURRENT_PATH, "scripts", "build_mapping_db.py")),
         nodes_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['NODES_JSONL'])),
         edges_jsonl = ancient(os.path.join(CURRENT_PATH, "data", config['TRANSLATOR_KG']['EDGES_JSONL'])),
-        unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step23_done.txt")),
+        unused_file = ancient(os.path.join(CURRENT_PATH, "results", "step19_done.txt")),
         database_name = ancient(os.path.join(CURRENT_PATH, config['DATABASE']['DATABASE_NAME']))
     output:
-        touch(os.path.join(CURRENT_PATH, "results", "step25_done.txt"))
+        touch(os.path.join(CURRENT_PATH, "results", "step22_done.txt"))
     params:
         outdir = CURRENT_PATH
     shell:

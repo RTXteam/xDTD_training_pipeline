@@ -33,6 +33,25 @@ if __name__ == '__main__':
     DISEASE_CATEGORIES = {'biolink:Disease', 'biolink:PhenotypicFeature'}
 
     ## ============================================================
+    ## Auto-detect biolink version from KGX content_metadata.json
+    ## ============================================================
+    metadata_path = os.path.join(os.path.dirname(args.nodes_jsonl), 'content_metadata.json')
+    biolink_version = args.biolink_version
+    if os.path.isfile(metadata_path):
+        with open(metadata_path) as f:
+            metadata = json.load(f)
+        biolink_version = metadata.get('biolink_model_version', args.biolink_version)
+        logger.info(f"Detected biolink version {biolink_version} from {metadata_path}")
+    else:
+        logger.info(
+            f"content_metadata.json not found at {metadata_path}; "
+            f"using fallback biolink version {biolink_version}"
+        )
+
+    with open(os.path.join(output_path, 'biolink_version.txt'), 'w') as f:
+        f.write(biolink_version)
+
+    ## ============================================================
     ## Load all nodes from JSONL and assign primary category
     ## ============================================================
     logger.info(f"Loading nodes from {args.nodes_jsonl}")
@@ -55,7 +74,7 @@ if __name__ == '__main__':
             if category_set & DISEASE_CATEGORIES:
                 disease_ids.add(node_id)
 
-            primary_category = utils.get_primary_category(categories, biolink_version=args.biolink_version)
+            primary_category = utils.get_primary_category(categories, biolink_version=biolink_version)
 
             node_records.append({
                 'id': node_id,

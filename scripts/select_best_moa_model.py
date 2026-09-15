@@ -47,10 +47,8 @@ def evaluate_model(args):
             d.setdefault(src, set()).add(tgt)
         return {k: list(v) for k, v in d.items()}
 
-    val_pairs = _read_pairs_as_ids(os.path.join(args.data_dir, 'RL_model_train_val_test_data', 'val_pairs.txt'))
     test_pairs = _read_pairs_as_ids(os.path.join(args.data_dir, 'RL_model_train_val_test_data', 'test_pairs.txt'))
-    eval_pairs = np.vstack([val_pairs, test_pairs])
-    eval_drug_disease_dict = _pairs_to_dict(eval_pairs)
+    eval_drug_disease_dict = _pairs_to_dict(test_pairs)
     all_pairs = _read_pairs_as_ids(os.path.join(args.data_dir, 'RL_model_train_val_test_data', 'all_pairs.txt'))
     all_drug_disease_dict = _pairs_to_dict(all_pairs)
 

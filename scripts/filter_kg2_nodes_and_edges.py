@@ -1,11 +1,10 @@
 ## Import Standard Packages
 import sys, os
-import polars as pl
 import argparse
-import sqlite3
 import json
-from tqdm import tqdm, trange
-from multiprocessing import Pool
+
+import polars as pl
+from tqdm import tqdm
 
 ## Import Personal Packages
 pathlist = os.getcwd().split(os.path.sep)
@@ -20,8 +19,9 @@ if __name__ == '__main__':
     parser.add_argument("--log_name", type=str, help="log file name", default="step3_filter_kg2_nodes_and_edges.log")
     parser.add_argument("--graph_nodes", type=str, help="Raw graph node file", default=os.path.join(ROOTPath, "data", "all_graph_nodes_info.txt"))
     parser.add_argument("--graph_edges", type=str, help="Raw graph edge file", default=os.path.join(ROOTPath, "data", "graph_edges.txt"))
-    parser.add_argument("--pub_threshold", type=float, help="Threshold used to filter number of supported publications", default=10)
     parser.add_argument("--biolink_version", type=str, help="Biolink version", default="4.2.0")
+    parser.add_argument("--remove_knowledge_sources", type=str, nargs='*', default=[],
+                        help="List of knowledge sources whose edges should be removed entirely.")
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "data"))
     args = parser.parse_args()
 
@@ -45,36 +45,25 @@ if __name__ == '__main__':
         pl.col('source').is_in(valid_node_ids) & pl.col('target').is_in(valid_node_ids)
     )
 
-    ## Split edges into SemMedDB edges and Non-SemMedDB edges
-    logger.info("Split edges into SemMedDB edges and Non-SemMedDB edges")
-    semmeddb_edges = []
-    non_semmeddb_edges = []
-    for edge in tqdm(filtered_graph_edges.iter_rows(named=True)):
+    ## Filter edges by removing those whose knowledge sources are all in the removal set
+    remove_source_set = set(args.remove_knowledge_sources)
+    if remove_source_set:
+        logger.info(f"Removing edges whose knowledge sources are all within: {remove_source_set}")
+    else:
+        logger.info("No knowledge sources specified for removal; keeping all edges")
+    kept_edges = []
+    for edge in tqdm(filtered_graph_edges.iter_rows(named=True), desc="Filtering edges by knowledge source"):
         p_publications = edge['p_publications'] if isinstance(edge['p_publications'], list) else json.loads(edge['p_publications'])
         p_knowledge_source = edge['p_knowledge_source'] if isinstance(edge['p_knowledge_source'], list) else json.loads(edge['p_knowledge_source'])
-        new_edge = [edge['source'], edge['target'], edge['predicate'], len(p_publications), p_knowledge_source]
-        if len(new_edge[4]) == 1 and new_edge[4][0] == 'infores:semmeddb':
-            semmeddb_edges.append(new_edge)
-        else:
-            non_semmeddb_edges.append(new_edge)
+        if remove_source_set and p_knowledge_source and set(p_knowledge_source).issubset(remove_source_set):
+            continue
+        kept_edges.append([edge['source'], edge['target'], edge['predicate'], len(p_publications), p_knowledge_source])
 
-    ## Filter edges based on number of supported publications
-    logger.info("Filter edges based on number of supported publications")
-    semmeddb_edges_df = pl.DataFrame(
-        semmeddb_edges,
+    combined_edges_df = pl.DataFrame(
+        kept_edges,
         schema=['source', 'target', 'predicate', 'num_publications', 'p_knowledge_source'],
         orient='row',
     )
-    filtered_semmeddb_edges_df = semmeddb_edges_df.filter(pl.col('num_publications') >= args.pub_threshold)
-
-    ## Combine SemMedDB edges and Non-SemMedDB edges
-    logger.info("Combine SemMedDB edges and Non-SemMedDB edges")
-    non_semmeddb_edges_df = pl.DataFrame(
-        non_semmeddb_edges,
-        schema=['source', 'target', 'predicate', 'num_publications', 'p_knowledge_source'],
-        orient='row',
-    )
-    combined_edges_df = pl.concat([non_semmeddb_edges_df, filtered_semmeddb_edges_df])
 
     ## Filter "redundant" edges based on Biolink edge hierarchy
     logger.info("Filter 'redundant' edges based on Biolink edge hierarchy")
@@ -114,3 +103,6 @@ if __name__ == '__main__':
     all_nodes_from_edges = set(out_edges_df['source'].to_list() + out_edges_df['target'].to_list())
     out_graph_nodes = filtered_graph_nodes.filter(pl.col('id').is_in(all_nodes_from_edges))
     out_graph_nodes.write_csv(os.path.join(output_path, "filtered_graph_nodes_info.txt"), separator='\t')
+
+    logger.info(f"Raw edges: {raw_graph_edges.height}, Filtered edges: {out_edges_df.height}")
+    logger.info(f"Raw nodes: {raw_graph_nodes.height}, Filtered nodes: {out_graph_nodes.height}")

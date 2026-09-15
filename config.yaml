@@ -1,18 +1,20 @@
+# ── DrugMechDB settings ────────────────────────────────────────────────────
 DRUGMECHDBINFO:
   LINK: "https://raw.githubusercontent.com/SuLab/DrugMechDB/main"
   DRUGMECHDB_PATH: "indication_paths.yaml"
 
+# ── Translator KG settings ────────────────────────────────────────────────
 TRANSLATOR_KG:
   DOWNLOAD_URL: "https://kgx-storage.ci.transltr.io/releases/translator_kg/2026_06_21/translator_kg.tar.zst"
   NODES_JSONL: "translator_kg/nodes.jsonl"
   EDGES_JSONL: "translator_kg/edges.jsonl"
 
+# ── Ground truth pairs settings ────────────────────────────────────────────
 GROUND_TRUTH_PAIRS:
   DIR: "ground_truth_pairs"
-  BASE_URL: "https://github.com/everycure-org/matrix-indication-list/releases/download/v1.4.1"
-  INDICATION_FILE: "indicationList.xlsx"
-  CONTRAINDICATION_FILE: "contraindicationList.xlsx"
+  GT_RAW_FILE: "gt_pairs_raw.tsv"
 
+# ── Drug/disease list settings ────────────────────────────────────────────
 DRUG_DISEASE_LIST:
   DIR: "drug_disease_list"
   DRUG_DATASET: "everycure/drug-list"
@@ -20,13 +22,15 @@ DRUG_DISEASE_LIST:
   DISEASE_DATASET: "everycure/disease-list"
   DISEASE_FILE: "matrix-disease-list.tsv"
 
+# ── KG settings ──────────────────────────────────────────────────────────
 KGINFO:
-  BIOLINK_VERSION: "4.4.2"
-  PUBLICATION_CUTOFF: 1
+  REMOVE_KNOWLEDGE_SOURCES: []  # e.g. ["infores:semmeddb"] to remove all SemMedDB edges
 
+# ── External data settings ────────────────────────────────────────────────
 EXTERNAL_DATA:
   DRUGBANK_XML: drugbank.xml
 
+# ── Model settings ──────────────────────────────────────────────────────
 MODELINFO:
   PARAMS:
     BANDWIDTH: 3000
@@ -38,15 +42,41 @@ MODELINFO:
     LEARNING_RATE: 0.0005
     EXPERT_PATH_PROCESS: 180
     EXPERT_PATH_BATCH_SIZE: 500
-    OPTUNA_N_TRIALS: 25
-    OPTUNA_N_STARTUP_TRIALS: 5
-    EARLY_STOPPING_ROUNDS: 30
-    
+
+# ── Node2Vec embedding settings (replaces GraphSAGE + PubMedBERT) ────────
+NODE2VEC:
+  EMBEDDING_DIM: 512
+  WALK_LENGTH: 30
+  WALKS_PER_NODE: 10
+  P: 1.0
+  Q: 1.0
+  ITERATIONS: 10
+  WINDOW_SIZE: 10
+  WORKERS: 64
+  SEED: 42
+
+# ── XGBoost ensemble settings (replaces single XGBoost) ──────────────────
+ENSEMBLE:
+  N_SHARDS: 3
+  N_REPLACEMENTS: 2
+  SKOPT_N_CALLS: 20
+  SKOPT_N_RANDOM_STARTS: 5
+  DEVICE: "cuda"
+  GPU_IDS: [0, 1, 2, 3]
+  EARLY_STOPPING_ROUNDS: 50
+  HPO_INNER_TEST_SIZE: 0.1
+
+# ── Train/test split settings (single fold, 90/10) ──────────────────────
+SPLIT:
+  TEST_SIZE: 0.1
+
+# ── Parallel precompute settings ───────────────────────────────────────────
 PARALLEL_PRECOMPUTE:
   K: 100
   N_drugs: 150
   N_paths: 50
   BATCH_SIZE: 200
 
+# ── Database settings ──────────────────────────────────────────────────────
 DATABASE:
   DATABASE_NAME: 'ExplainableDTD_v1.0-tier0-20260621-all_with_paths.db'

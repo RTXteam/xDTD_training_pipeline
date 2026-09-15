@@ -2,7 +2,6 @@ import collections
 import functools
 import logging
 import logging.handlers
-import math
 import os
 import pickle
 import random
@@ -18,7 +17,7 @@ import requests
 import torch
 import torch.nn as nn
 from bmt import Toolkit as BiolinkToolkit
-from sklearn.metrics import f1_score, precision_recall_curve
+from sklearn.metrics import precision_recall_curve
 from torch.autograd import Variable
 from tqdm import tqdm
 
@@ -46,28 +45,6 @@ def get_primary_category(categories, biolink_version='4.2.0'):
     if len(non_mixin) == 1:
         return non_mixin[0]
     return min(non_mixin, key=lambda c: len(tk.get_descendants(c, mixin=False, formatted=True)))
-
-
-def get_leaf_categories(categories, biolink_version='4.2.0'):
-    """Return all leaf (most specific) non-mixin categories from a list.
-
-    A category is a "leaf" if no other category in the set is more specific
-    (i.e. it is not an ancestor of any other category in the set).
-    """
-    if not categories:
-        return ['biolink:NamedThing']
-    tk = get_biolink_helper(biolink_version)
-    non_mixin = [c for c in categories if not tk.is_mixin(c)]
-    non_mixin = [c for c in non_mixin if c != 'biolink:NamedThing']
-    if not non_mixin:
-        return ['biolink:NamedThing']
-    all_ancestors = set()
-    for cat in non_mixin:
-        ancestors = set(tk.get_ancestors(cat, mixin=False, formatted=True))
-        ancestors.discard(cat)
-        all_ancestors.update(ancestors)
-    leaves = [c for c in non_mixin if c not in all_ancestors]
-    return leaves if leaves else ['biolink:NamedThing']
 
 
 ## ── Node Normalization API helpers ──────────────────────────────────────
@@ -133,7 +110,6 @@ DUMMY_ENTITY_ID = 0
 EPSILON = float(np.finfo(float).eps)
 HUGE_INT = 1e31
 TINY_VALUE = 1e-41
-NGD_normalizer = 4.0e+7 * 20  # ~40M PubMed articles x ~20 MeSH terms each (as of 2026-04-04)
 
 
 ## ── Data loading helpers ─────────────────────────────────────────────────
@@ -169,21 +145,7 @@ class ACDataLoader:
         return batch_indexes.tolist()
 
 
-## ── Text cleanup and NGD ─────────────────────────────────────────────────
-def calculate_ngd(concept_pubmed_ids):
-    """Normalized Google Distance between two sets of PubMed IDs."""
-    if concept_pubmed_ids[0] is None or concept_pubmed_ids[1] is None:
-        return None
-    marginal_counts = [len(set(pmids)) for pmids in concept_pubmed_ids]
-    joint_count = len(set(concept_pubmed_ids[0]) & set(concept_pubmed_ids[1]))
-    if 0 in marginal_counts or joint_count == 0:
-        return None
-    try:
-        log_marginals = [math.log(c) for c in marginal_counts]
-        return (max(log_marginals) - math.log(joint_count)) / (math.log(NGD_normalizer) - min(log_marginals))
-    except ValueError:
-        return None
-
+## ── Text cleanup ─────────────────────────────────────────────────────────
 def clean_up_desc(string):
     if isinstance(string, str):
         string = re.sub(r"UMLS Semantic Type: UMLS_STY:[a-zA-Z][0-9]{3}[;]?", "", string).strip().strip(";")
@@ -328,11 +290,6 @@ def relation_load_embed(args):
     return torch.tensor(np.load(path)).float()
 
 
-def entity_type_load_embed(args):
-    path = os.path.join(args.data_dir, 'kg_init_embeddings', 'entity_type_embeddings.npy')
-    return torch.tensor(np.load(path)).float()
-
-
 def batch_lookup(M, idx, vector_output=True):
     batch_size, _ = M.size()
     batch_size2, sample_size = idx.size()
@@ -345,11 +302,6 @@ def batch_lookup(M, idx, vector_output=True):
 def empty_gpu_cache(args):
     with torch.cuda.device(f'cuda:{args.gpu}'):
         torch.cuda.empty_cache()
-
-
-def ones_var_cuda(s, args, requires_grad=False, use_gpu=True):
-    v = Variable(torch.ones(s), requires_grad=requires_grad)
-    return v.to(args.device) if use_gpu else v.long()
 
 
 def zeros_var_cuda(s, args, requires_grad=False, use_gpu=True):
@@ -377,41 +329,6 @@ def pad_and_cat(a, padding_value, padding_dim=1):
         else:
             padded_a.append(x)
     return torch.cat(padded_a, dim=0)
-
-def rearrange_vector_list(l, offset):
-    for i, v in enumerate(l):
-        l[i] = v[offset]
-
-
-def tile_along_beam(v, beam_size, dim=0):
-    """
-    Tile a tensor along a specified dimension for the specified beam size.
-    :param v: Input tensor.
-    :param beam_size: Beam size.
-    """
-    if dim == -1:
-        dim = len(v.size()) - 1
-    v = v.unsqueeze(dim + 1)
-    v = torch.cat([v] * beam_size, dim=dim+1)
-    new_size = []
-    for i, d in enumerate(v.size()):
-        if i == dim + 1:
-            new_size[-1] *= d
-        else:
-            new_size.append(d)
-    return v.view(new_size)
-
-
-def flatten(l):
-    """Flatten nested lists/tuples into a single list."""
-    flat = []
-    for c in l:
-        if isinstance(c, (list, tuple)):
-            flat.extend(flatten(c))
-        else:
-            flat.append(c)
-    return flat
-
 
 def unique_max(unique_x, x, values, args, marker_2D=None, use_gpu=True):
     unique_interval = 2
@@ -451,56 +368,6 @@ def get_logger(logname):
     logger.addHandler(fh)
     return logger
 
-
-## ── Triple / metric helpers ──────────────────────────────────────────────
-def load_triples(data_path, entity_index_path, relation_index_path, group_examples_by_query=False, seen_entities=None, verbose=False):
-    """
-    Convert triples stored on disc into indices.
-    """
-    entity2id, _ = load_index(entity_index_path)
-    relation2id, _ = load_index(relation_index_path)
-
-    def triple2ids(source, target, relation):
-        return entity2id[source], entity2id[target], relation2id[relation]
-
-    triples = []
-    if group_examples_by_query:
-        triple_dict = {}
-    with open(data_path) as f:
-        num_skipped = 0
-        for line in f:
-            source, target, relation = line.strip().split()
-            if seen_entities and (not source in seen_entities or not target in seen_entities):
-                num_skipped += 1
-                if verbose:
-                    print('Skip triple ({}) with unseen entity: {}'.format(num_skipped, line.strip())) 
-                continue
-
-            if group_examples_by_query:
-                source_id, target_id, relation_id = triple2ids(source, target, relation)
-                if source_id not in triple_dict:
-                    triple_dict[source_id] = {}
-                if relation_id not in triple_dict[source_id]:
-                    triple_dict[source_id][relation_id] = set()
-                triple_dict[source_id][relation_id].add(target_id)
-            else:
-                triples.append(triple2ids(source, target, relation))
-
-    if group_examples_by_query:
-        for source_id in triple_dict:
-            for relation_id in triple_dict[source_id]:
-                triples.append((source_id, list(triple_dict[source_id][relation_id]), relation_id))
-    print('{} triples loaded from {}'.format(len(triples), data_path))
-    return triples
-
-def calculate_f1score(preds, labels, average='binary'):
-    y_pred_tags = np.argmax(np.array(preds), axis=1)
-    return f1_score(np.array(labels), y_pred_tags, average=average)
-
-
-def calculate_acc(preds, labels):
-    y_pred_tags = np.argmax(np.array(preds), axis=1)
-    return (y_pred_tags == np.array(labels)).astype(float).mean()
 
 ## ── Full-matrix evaluation metrics ───────────────────────────────────────
 
@@ -905,8 +772,8 @@ def check_device(logger, use_gpu: bool = False, gpu: int = 0):
 
 
 def load_graphsage_unsupervised_embeddings(data_path: str):
-    file_path = os.path.join(data_path, 'graphsage_output', 'unsuprvised_graphsage_entity_embeddings.pkl')
-    with open(file_path, 'rb') as infile:
+    node2vec_path = os.path.join(data_path, 'node2vec_output', 'node2vec_entity_embeddings.pkl')
+    with open(node2vec_path, 'rb') as infile:
         entity_embeddings_dict = pickle.load(infile)
     return entity_embeddings_dict
 
@@ -928,16 +795,6 @@ def check_curie_available(logger, curie: str, available_curies_dict: dict):
     if curie in available_curies_dict:
         return [True, curie]
     return [False, None]
-
-
-def check_curie(curie: str, entity2id):
-    if curie is None:
-        return (None, None)
-    info = get_node_norm_info(curie)
-    preferred_curie = info['preferred_curie'] if info else None
-    if preferred_curie and preferred_curie in entity2id:
-        return (preferred_curie, entity2id[preferred_curie])
-    return (preferred_curie, None)
 
 
 def id_to_name(curie: str):

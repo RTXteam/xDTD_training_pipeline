@@ -161,6 +161,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_dir', type=str, help='Full path of data folder', default=os.path.join(ROOTPath, "data"))
     parser.add_argument('--path_file_name', type=str, default='train_expert_demonstration_relation_entity_max3_filtered.pkl', help='expert demonstration path file name')
     parser.add_argument('--text_emb_file_name', type=str, help='The name of text embedding file', default='embedding_biobert_namecat.pkl')
+    parser.add_argument('--text_emb_dir', type=str, help='Subdirectory under data_dir for text/entity embeddings (default: text_embedding)', default='text_embedding')
     parser.add_argument('--expert_dir_name', type=str, help='The name of expert path directory', default='expert_path_files')
     parser.add_argument("--output_folder", type=str, help="The path of output folder", default=os.path.join(ROOTPath, "models"))
 
@@ -220,7 +221,7 @@ if __name__ == '__main__':
     os.makedirs(kg_init_embedding_folder, exist_ok=True)
 
     if not os.path.isfile(os.path.join(kg_init_embedding_folder, 'entity_embeddings.npy')):
-        with open(os.path.join(args.data_dir, 'text_embedding', args.text_emb_file_name), 'rb') as f:
+        with open(os.path.join(args.data_dir, args.text_emb_dir, args.text_emb_file_name), 'rb') as f:
             text_emb = pickle.load(f)
         _, id2entity = utils.load_index(os.path.join(args.data_dir, 'entity2freq.txt'))
         entity_embeddings = np.array([text_emb[id2entity[key]] for key in id2entity if key != 0]).astype(float)
