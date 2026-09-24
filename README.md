@@ -261,8 +261,8 @@ Reads the translator KG JSONL files and adds two mapping tables to the existing 
 
 | Table | Key | Columns |
 |-------|-----|---------|
-| `NODE_MAPPING_TABLE` | `id` | `name`, `category`, `equivalent_identifiers`, `description`, `synonym`, `xref`, `chembl_natural_product`, `chembl_availability_type`, `chembl_black_box_warning` |
-| `EDGE_MAPPING_TABLE` | (`subject`, `predicate`, `object`) | `id`, `category`, `qualifier`, `publications`, `sources`, `resource_id`, `resource_role`, `knowledge_level`, `agent_type`, `stage_qualifier`, `original_subject`, `original_object`, `extra_attributes` |
+| `NODE_MAPPING_TABLE` | `id` | `name`, `category`, `extra_attributes` (JSON) |
+| `EDGE_MAPPING_TABLE` | (`subject`, `predicate`, `object`) | `id`, `category`, `extra_attributes` (JSON) |
 
 These tables enable looking up KG node/edge metadata when interpreting predicted paths.
 

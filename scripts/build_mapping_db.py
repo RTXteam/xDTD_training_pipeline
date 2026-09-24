@@ -77,13 +77,7 @@ class xDTDMappingDB():
                 id TEXT NOT NULL,
                 name TEXT,
                 category TEXT,
-                equivalent_identifiers TEXT,
-                description TEXT,
-                synonym TEXT,
-                xref TEXT,
-                chembl_natural_product TEXT,
-                chembl_availability_type TEXT,
-                chembl_black_box_warning TEXT
+                extra_attributes TEXT
             )
         """)
 
@@ -95,16 +89,6 @@ class xDTDMappingDB():
                 object TEXT NOT NULL,
                 id TEXT,
                 category TEXT,
-                qualifier TEXT,
-                publications TEXT,
-                sources TEXT,
-                resource_id TEXT,
-                resource_role TEXT,
-                knowledge_level TEXT,
-                agent_type TEXT,
-                stage_qualifier TEXT,
-                original_subject TEXT,
-                original_object TEXT,
                 extra_attributes TEXT
             )
         """)
@@ -116,31 +100,27 @@ class xDTDMappingDB():
             return
 
         BATCH_SIZE = 50000
-        NODE_INSERT = "INSERT INTO NODE_MAPPING_TABLE VALUES (?,?,?,?,?,?,?,?,?,?)"
-        EDGE_INSERT = "INSERT INTO EDGE_MAPPING_TABLE VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        NODE_INSERT = "INSERT INTO NODE_MAPPING_TABLE VALUES (?,?,?,?)"
+        EDGE_INSERT = "INSERT INTO EDGE_MAPPING_TABLE VALUES (?,?,?,?,?,?)"
 
         self.conn.execute("PRAGMA journal_mode = WAL")
         self.conn.execute("PRAGMA synchronous = OFF")
         self.conn.execute("PRAGMA cache_size = -2000000")
 
         # --- Insert nodes ---
+        NODE_CORE_KEYS = frozenset({'id', 'name', 'category'})
         self.logger.info("Inserting into NODE_MAPPING...")
         batch = []
         node_count = 0
         with open(nodes_jsonl_path, 'r', encoding='utf-8') as f:
             for line in tqdm(f, desc="inserting into NODE_MAPPING_TABLE"):
                 d = json.loads(line)
+                extra = {k: v for k, v in d.items() if k not in NODE_CORE_KEYS}
                 row = (
                     d['id'],
                     d.get('name'),
                     json.dumps(d['category']) if 'category' in d else None,
-                    json.dumps(d['equivalent_identifiers']) if 'equivalent_identifiers' in d else None,
-                    d.get('description'),
-                    json.dumps(d['synonym']) if 'synonym' in d else None,
-                    json.dumps(d['xref']) if 'xref' in d else None,
-                    str(d['chembl_natural_product']) if 'chembl_natural_product' in d else None,
-                    d.get('chembl_availability_type'),
-                    d.get('chembl_black_box_warning'),
+                    json.dumps(extra) if extra else None,
                 )
                 batch.append(row)
                 node_count += 1
@@ -154,37 +134,20 @@ class xDTDMappingDB():
         self.logger.info(f"Inserted {node_count} rows into NODE_MAPPING_TABLE")
 
         # --- Insert edges ---
+        EDGE_CORE_KEYS = frozenset({'subject', 'predicate', 'object', 'id', 'category'})
         self.logger.info("Inserting edges into EDGE_MAPPING_TABLE...")
         batch = []
         edge_count = 0
-        CORE_KEYS = {
-            'subject', 'predicate', 'object', 'id', 'category', 'qualifier',
-            'publications', 'sources', 'knowledge_level', 'agent_type',
-            'stage_qualifier', 'original_subject', 'original_object',
-        }
         with open(edges_jsonl_path, 'r', encoding='utf-8') as f:
             for line in tqdm(f, desc="Inserting edges into EDGE_MAPPING_TABLE"):
                 d = json.loads(line)
-                sources = d.get('sources', [])
-                resource_ids = '|'.join(s.get('resource_id', '') for s in sources)
-                resource_roles = '|'.join(s.get('resource_role', '') for s in sources)
-                extra = {k: v for k, v in d.items() if k not in CORE_KEYS}
+                extra = {k: v for k, v in d.items() if k not in EDGE_CORE_KEYS}
                 row = (
                     d['subject'],
                     d['predicate'],
                     d['object'],
                     d.get('id'),
                     json.dumps(d['category']) if 'category' in d else None,
-                    d.get('qualifier'),
-                    json.dumps(d['publications']) if 'publications' in d else None,
-                    json.dumps(sources) if sources else None,
-                    resource_ids or None,
-                    resource_roles or None,
-                    d.get('knowledge_level'),
-                    d.get('agent_type'),
-                    d.get('stage_qualifier'),
-                    d.get('original_subject'),
-                    d.get('original_object'),
                     json.dumps(extra) if extra else None,
                 )
                 batch.append(row)
@@ -218,9 +181,7 @@ class xDTDMappingDB():
 
     def get_node_info(self, node_id=None, node_name=None):
         NodeInfo = collections.namedtuple('NodeInfo', [
-            'id', 'name', 'category', 'equivalent_identifiers', 'description',
-            'synonym', 'xref', 'chembl_natural_product', 'chembl_availability_type',
-            'chembl_black_box_warning'
+            'id', 'name', 'category', 'extra_attributes'
         ])
         cursor = self.conn.cursor()
         if node_id is not None:
@@ -230,21 +191,37 @@ class xDTDMappingDB():
         else:
             return None
         result = cursor.fetchone()
-        return NodeInfo._make(result) if result else None
+        if not result:
+            return None
+        values = list(result)
+        cat_idx = NodeInfo._fields.index('category')
+        if values[cat_idx]:
+            try:
+                values[cat_idx] = json.loads(values[cat_idx])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return NodeInfo._make(values)
 
     def get_edge_info(self, subject, predicate, object_id):
         EdgeInfo = collections.namedtuple('EdgeInfo', [
-            'subject', 'predicate', 'object', 'id', 'category', 'qualifier',
-            'publications', 'sources', 'resource_id', 'resource_role',
-            'knowledge_level', 'agent_type', 'stage_qualifier',
-            'original_subject', 'original_object', 'extra_attributes'
+            'subject', 'predicate', 'object', 'id', 'category', 'extra_attributes'
         ])
+        cat_idx = EdgeInfo._fields.index('category')
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT * FROM EDGE_MAPPING_TABLE WHERE subject = ? AND predicate = ? AND object = ?",
             (subject, predicate, object_id)
         )
-        return [EdgeInfo._make(record) for record in cursor.fetchall()]
+        results = []
+        for record in cursor.fetchall():
+            values = list(record)
+            if values[cat_idx]:
+                try:
+                    values[cat_idx] = json.loads(values[cat_idx])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            results.append(EdgeInfo._make(values))
+        return results
 
 
 def main():
